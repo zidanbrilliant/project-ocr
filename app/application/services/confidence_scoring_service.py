@@ -1,0 +1,103 @@
+from typing import Any
+
+from app.domain.entities.detection_result import DetectionResult
+from app.domain.entities.ocr_result import OCRResult as OCREntity
+from app.domain.services.confidence_policy import ConfidencePolicy
+from app.domain.value_objects.confidence_score import ConfidenceScore
+from app.infrastructure.document_converter.image_preprocessor import ImagePreprocessor
+from app.shared.config.settings import settings
+from app.shared.logging.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class ConfidenceScoringService:
+    def __init__(self) -> None:
+        self._policy = ConfidencePolicy()
+        self._preprocessor = ImagePreprocessor()
+
+    def calculate(
+        self,
+        ocr_result: dict[str, Any],
+        detections: list[dict[str, Any]],
+        barcode_result: dict[str, Any],
+        document_info: dict[str, Any],
+        image_bytes: bytes | None = None,
+    ) -> float:
+        from app.domain.entities.ocr_result import OCRResult
+        from app.domain.entities.detection_result import DetectionResult
+
+        ocr = self._ocr_result_from_dict(ocr_result)
+        detection_entities = [self._detection_from_dict(d) for d in detections]
+
+        barcode_required = settings.REQUIRE_BARCODE_FOR_INVOICE
+        barcode_decoded = barcode_result.get("barcode_decoded", False)
+        barcode_found = barcode_result.get("barcode_found", False)
+
+        if barcode_required and barcode_decoded:
+            barcode_confidence = 100.0
+        elif barcode_required and barcode_found:
+            barcode_confidence = 70.0
+        elif barcode_required:
+            barcode_confidence = 0.0
+        else:
+            barcode_confidence = 100.0
+
+        quality_score = self._compute_quality(document_info, image_bytes)
+
+        total = self._policy.calculate(
+            ocr=ocr,
+            detections=detection_entities,
+            barcode_confidence=barcode_confidence,
+            document_quality_score=quality_score,
+            barcode_required=barcode_required,
+        )
+        return round(total, 2)
+
+    def should_be_null(self, error_type: str | None) -> bool:
+        return error_type in ("DOCUMENT_ERROR", "INTERNAL_ERROR", "DLQ_ERROR")
+
+    def confidence_to_int(self, value: float | None) -> int | None:
+        if value is None:
+            return None
+        return round(value)
+
+    def confidence_level(self, value: float | None) -> str | None:
+        return ConfidenceScore.level(value)
+
+    def _compute_quality(self, document_info: dict[str, Any], image_bytes: bytes | None) -> float:
+        if image_bytes:
+            quality = self._preprocessor.compute_quality(image_bytes)
+            scores = [
+                quality.get("resolution_score", 100),
+                quality.get("blur_score", 100),
+                quality.get("brightness_score", 100),
+                quality.get("page_readability_score", 100),
+            ]
+            return round(sum(scores) / len(scores), 2)
+        return 100.0
+
+    def _ocr_result_from_dict(self, data: dict[str, Any]) -> OCREntity:
+        r = OCREntity()
+        r.raw_text = data.get("raw_text")
+        r.average_confidence = data.get("average_confidence")
+        r.invoice_number = data.get("invoice_number")
+        r.billing_number = data.get("billing_number")
+        r.transaction_amount = data.get("transaction_amount")
+        r.invoice_confidence = data.get("invoice_confidence")
+        r.billing_confidence = data.get("billing_confidence")
+        r.amount_confidence = data.get("amount_confidence")
+        return r
+
+    def _detection_from_dict(self, data: dict[str, Any]) -> DetectionResult:
+        from app.domain.entities.detection_result import DetectionResult
+        return DetectionResult(
+            page_number=data.get("page_number", 1),
+            model_name=data.get("model_name", ""),
+            model_version=data.get("model_version", ""),
+            object_type=data.get("object_type", ""),
+            result=data.get("result", "NG"),
+            required=data.get("required", False),
+            confidence=data.get("confidence"),
+            bounding_box=data.get("bounding_box"),
+        )

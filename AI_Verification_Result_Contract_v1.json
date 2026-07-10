@@ -1,0 +1,1010 @@
+{
+  "contract_name": "ELVIS AI Verification Contract",
+  "contract_version": "1.0",
+  "request_example": {
+    "message_version": "1.0",
+    "queue_no": "AIQ-20260630-000001",
+    "correlation_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+    "pv_no": "000123456",
+    "pv_year": "2026",
+    "transaction_type": "REIMBURSEMENT_TOLL",
+    "vendor_code": "VDR001",
+    "vendor_name": "PT Example Vendor",
+    "total_amount": 5500000,
+    "created_datetime": "2026-06-30T09:30:00",
+    "documents": [
+      {
+        "document_id": "DOC-001",
+        "document_type": "INVOICE",
+        "document_category": "MAIN_DOCUMENT",
+        "attachment_url": "https://image-server/elvis/000123456/invoice.pdf"
+      },
+      {
+        "document_id": "BILL-001",
+        "document_type": "BILLING_DOCUMENT",
+        "document_category": "MAIN_DOCUMENT",
+        "attachment_url": "https://image-server/elvis/000123456/billing.pdf"
+      },
+      {
+        "document_id": "DN-002",
+        "document_type": "DELIVERY_NOTE",
+        "document_category": "SECOND_DOCUMENT",
+        "attachment_url": "https://image-server/elvis/000123456/delivery-note1.pdf"
+      },
+      {
+        "document_id": "DN-003",
+        "document_type": "DELIVERY_NOTE",
+        "document_category": "SECOND_DOCUMENT",
+        "attachment_url": "https://image-server/elvis/000123456/delivery-note2.pdf"
+      }
+    ]
+  },
+  "response_example_ng": {
+    "header": {
+      "message_version": "1.0",
+      "queue_no": "AIQ-20260630-000001",
+      "correlation_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "pv_no": "000123456",
+      "pv_year": "2026",
+      "request_source": "ELVIS",
+      "response_source": "AI Verification Service",
+      "overall_result": "NG",
+      "processing_status": "Completed",
+      "processing_result": "SUCCESS",
+      "ai_confidence": 82.45,
+      "ai_confidence_level": "Medium",
+      "confidence_method": "Average Mandatory Validation",
+      "processing": {
+        "request_datetime": "2026-06-30T09:30:00",
+        "start_datetime": "2026-06-30T09:30:01",
+        "finish_datetime": "2026-06-30T09:30:08",
+        "duration_ms": 7120
+      },
+      "model": {
+        "model_name": "ELVIS AI Verification",
+        "model_version": "v2.6.0",
+        "trained_date": "2026-06-15",
+        "training_dataset": "Dataset-202606",
+        "training_batch": "20260615-01"
+      },
+      "validation_rule": {
+        "rule_version": "v1.0",
+        "rule_date": "2026-06-10"
+      },
+      "errors": [],
+      "summary": {
+        "total_documents": 4,
+        "ok_documents": 2,
+        "ng_documents": 2,
+        "main_document": 2,
+        "second_document": 2,
+        "main_document_ok": 1,
+        "main_document_ng": 1,
+        "second_document_ok": 1,
+        "second_document_ng": 1
+      },
+      "validation_summary": {
+        "invoice": "NG",
+        "billing_document": "OK",
+        "delivery_note_1": "NG",
+        "delivery_note_2": "OK",
+        "duplicate_check": "OK",
+        "transaction_period": "OK"
+      },
+      "failed_documents": [
+        {
+          "document_id": "DOC-001",
+          "document_type": "INVOICE",
+          "document_name": "invoice.pdf",
+          "reason": [
+            "Stamp Colour",
+            "Materai"
+          ]
+        },
+        {
+          "document_id": "DN-002",
+          "document_type": "DELIVERY_NOTE",
+          "document_name": "delivery-note1.pdf",
+          "reason": [
+            "Vendor Stamp"
+          ]
+        }
+      ],
+      "failed_validation_summary": {
+        "missing_materai": 1,
+        "invalid_stamp_colour": 1,
+        "missing_vendor_stamp": 1,
+        "duplicate_document": 0,
+        "transaction_period": 0,
+        "missing_signature": 0,
+        "amount_mismatch": 0
+      },
+      "ai_note": "AI Verification completed with validation failures on 2 of 4 submitted documents. Invoice failed because Materai was not detected and stamp colour does not match the required company standard. Delivery Note #1 failed because vendor stamp was not detected. Billing Document and Delivery Note #2 passed all mandatory validations."
+    },
+    "documents": [
+      {
+        "document_id": "DOC-001",
+        "document_name": "invoice.pdf",
+        "document_type": "INVOICE",
+        "document_category": "MAIN_DOCUMENT",
+        "document_version": 1,
+        "page_count": 1,
+        "file_information": {
+          "file_name": "invoice.pdf",
+          "file_extension": "pdf",
+          "file_size": 582139,
+          "attachment_url": "https://image-server/elvis/000123456/invoice.pdf"
+        },
+        "processing_result": "SUCCESS",
+        "verification_datetime": "2026-06-30T09:30:05",
+        "ocr_engine": "ELVIS OCR Engine",
+        "ocr_version": "v1.4.0",
+        "ocr": {
+          "document_number": {
+            "value": "INV-2026-001",
+            "result": "OK",
+            "confidence": 99.82,
+            "bounding_box": [
+              210,
+              145,
+              620,
+              190
+            ]
+          },
+          "transaction_date": {
+            "value": "2026-06-20",
+            "result": "OK",
+            "confidence": 99.5,
+            "bounding_box": [
+              210,
+              220,
+              450,
+              260
+            ]
+          },
+          "transaction_time": {
+            "value": "10:30:00",
+            "result": "OK",
+            "confidence": 98.92,
+            "bounding_box": [
+              470,
+              220,
+              610,
+              260
+            ]
+          },
+          "vendor_name": {
+            "value": "PT Example Vendor",
+            "result": "OK",
+            "confidence": 98.75,
+            "bounding_box": [
+              210,
+              310,
+              690,
+              355
+            ],
+            "master_vendor": "PT Example Vendor"
+          },
+          "transaction_amount": {
+            "value": 5500000,
+            "result": "OK",
+            "confidence": 99.95,
+            "bounding_box": [
+              1080,
+              1320,
+              1430,
+              1375
+            ],
+            "pv_amount": 5500000,
+            "tolerance": 0
+          }
+        },
+        "verification": {
+          "signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.7,
+            "bounding_box": [
+              1185,
+              1450,
+              1518,
+              1762
+            ]
+          },
+          "stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.4,
+            "bounding_box": [
+              965,
+              1388,
+              1320,
+              1725
+            ]
+          },
+          "stamp_colour": {
+            "required": true,
+            "result": "NG",
+            "confidence": 61.8,
+            "detected_colour": "Black",
+            "expected_colour": "Blue",
+            "bounding_box": [
+              965,
+              1388,
+              1320,
+              1725
+            ],
+            "reason": "Detected stamp colour does not match the required stamp colour.",
+            "recommendation": "Use the official company stamp colour."
+          },
+          "materai": {
+            "required": true,
+            "result": "NG",
+            "confidence": 2.5,
+            "bounding_box": null,
+            "reason": "Materai not detected.",
+            "recommendation": "Upload invoice with valid Materai because transaction amount is equal to or greater than IDR 5,000,000."
+          }
+        },
+        "duplicate_check": {
+          "result": "OK",
+          "confidence": 99.9,
+          "matched_document": null,
+          "matched_document_type": null,
+          "matched_pv": null,
+          "matched_date": null
+        },
+        "business_rule": {
+          "transaction_period": {
+            "rule": "Toll reimbursement transaction date must not exceed 2 months.",
+            "result": "OK"
+          },
+          "amount_validation": {
+            "rule": "Document amount must match PV amount.",
+            "result": "OK"
+          },
+          "vendor_validation": {
+            "rule": "Vendor name must match PV vendor name.",
+            "result": "OK"
+          }
+        },
+        "errors": [],
+        "document_summary": {
+          "result": "NG",
+          "confidence": 78.5,
+          "confidence_level": "Medium",
+          "total_validation": 9,
+          "mandatory_validation": 9,
+          "optional_validation": 0,
+          "passed_validation": 7,
+          "failed_validation": 2,
+          "failed_items": [
+            "Stamp Colour",
+            "Materai"
+          ],
+          "reason": "Two mandatory validation items failed. Stamp colour is invalid and Materai was not detected.",
+          "recommendation": [
+            "Upload invoice with valid Materai.",
+            "Ensure the official stamp colour is used."
+          ]
+        },
+        "ai_note": "Invoice verification failed because stamp colour and Materai validation failed."
+      },
+      {
+        "document_id": "BILL-001",
+        "document_name": "billing.pdf",
+        "document_type": "BILLING_DOCUMENT",
+        "document_category": "MAIN_DOCUMENT",
+        "document_version": 1,
+        "page_count": 1,
+        "file_information": {
+          "file_name": "billing.pdf",
+          "file_extension": "pdf",
+          "file_size": 431220,
+          "attachment_url": "https://image-server/elvis/000123456/billing.pdf"
+        },
+        "processing_result": "SUCCESS",
+        "verification_datetime": "2026-06-30T09:30:06",
+        "ocr_engine": "ELVIS OCR Engine",
+        "ocr_version": "v1.4.0",
+        "ocr": {
+          "document_number": {
+            "value": "BILL-2026-001",
+            "result": "OK",
+            "confidence": 99.55
+          },
+          "transaction_date": {
+            "value": "2026-06-21",
+            "result": "OK",
+            "confidence": 99.2
+          },
+          "transaction_time": {
+            "value": "11:15:00",
+            "result": "OK",
+            "confidence": 98.3
+          },
+          "vendor_name": {
+            "value": "PT Example Vendor",
+            "result": "OK",
+            "confidence": 98.9,
+            "master_vendor": "PT Example Vendor"
+          },
+          "transaction_amount": {
+            "value": 5500000,
+            "result": "OK",
+            "confidence": 99.8,
+            "pv_amount": 5500000,
+            "tolerance": 0
+          }
+        },
+        "verification": {
+          "signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.1
+          },
+          "stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.9
+          },
+          "stamp_colour": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.2,
+            "detected_colour": "Blue",
+            "expected_colour": "Blue"
+          },
+          "materai": {
+            "required": true,
+            "result": "OK",
+            "confidence": 97.9
+          }
+        },
+        "duplicate_check": {
+          "result": "OK",
+          "confidence": 99.6,
+          "matched_document": null,
+          "matched_document_type": null,
+          "matched_pv": null,
+          "matched_date": null
+        },
+        "business_rule": {
+          "transaction_period": {
+            "rule": "Other transaction date must not exceed 6 months.",
+            "result": "OK"
+          },
+          "amount_validation": {
+            "rule": "Document amount must match PV amount.",
+            "result": "OK"
+          },
+          "vendor_validation": {
+            "rule": "Vendor name must match PV vendor name.",
+            "result": "OK"
+          }
+        },
+        "errors": [],
+        "document_summary": {
+          "result": "OK",
+          "confidence": 98.8,
+          "confidence_level": "Very High",
+          "total_validation": 9,
+          "mandatory_validation": 9,
+          "optional_validation": 0,
+          "passed_validation": 9,
+          "failed_validation": 0,
+          "failed_items": [],
+          "reason": "All mandatory validation items passed successfully.",
+          "recommendation": null
+        },
+        "ai_note": "Billing Document successfully verified."
+      },
+      {
+        "document_id": "DN-002",
+        "document_name": "delivery-note1.pdf",
+        "document_type": "DELIVERY_NOTE",
+        "document_category": "SECOND_DOCUMENT",
+        "document_version": 1,
+        "page_count": 1,
+        "file_information": {
+          "file_name": "delivery-note1.pdf",
+          "file_extension": "pdf",
+          "file_size": 390881,
+          "attachment_url": "https://image-server/elvis/000123456/delivery-note1.pdf"
+        },
+        "processing_result": "SUCCESS",
+        "verification_datetime": "2026-06-30T09:30:07",
+        "ocr_engine": "ELVIS OCR Engine",
+        "ocr_version": "v1.4.0",
+        "ocr": {
+          "document_number": {
+            "value": "DN-2026-001",
+            "result": "OK",
+            "confidence": 99.3
+          },
+          "vendor_name": {
+            "value": "PT Example Vendor",
+            "result": "OK",
+            "confidence": 99.1,
+            "master_vendor": "PT Example Vendor"
+          }
+        },
+        "verification": {
+          "vendor_stamp": {
+            "required": true,
+            "result": "NG",
+            "confidence": 23.5,
+            "bounding_box": null,
+            "reason": "Vendor stamp was not detected.",
+            "recommendation": "Upload Delivery Note with visible vendor stamp."
+          },
+          "vendor_signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.6
+          },
+          "tmmin_stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.2
+          },
+          "tmmin_signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.8
+          }
+        },
+        "errors": [],
+        "document_summary": {
+          "result": "NG",
+          "confidence": 81.4,
+          "confidence_level": "Medium",
+          "total_validation": 6,
+          "mandatory_validation": 6,
+          "optional_validation": 0,
+          "passed_validation": 5,
+          "failed_validation": 1,
+          "failed_items": [
+            "Vendor Stamp"
+          ],
+          "reason": "Vendor stamp is mandatory but was not detected.",
+          "recommendation": [
+            "Upload Delivery Note with visible vendor stamp."
+          ]
+        },
+        "ai_note": "Delivery Note verification failed because vendor stamp was not detected."
+      },
+      {
+        "document_id": "DN-003",
+        "document_name": "delivery-note2.pdf",
+        "document_type": "DELIVERY_NOTE",
+        "document_category": "SECOND_DOCUMENT",
+        "document_version": 1,
+        "page_count": 1,
+        "file_information": {
+          "file_name": "delivery-note2.pdf",
+          "file_extension": "pdf",
+          "file_size": 402112,
+          "attachment_url": "https://image-server/elvis/000123456/delivery-note2.pdf"
+        },
+        "processing_result": "SUCCESS",
+        "verification_datetime": "2026-06-30T09:30:08",
+        "ocr_engine": "ELVIS OCR Engine",
+        "ocr_version": "v1.4.0",
+        "ocr": {
+          "document_number": {
+            "value": "DN-2026-002",
+            "result": "OK",
+            "confidence": 99.4
+          },
+          "vendor_name": {
+            "value": "PT Example Vendor",
+            "result": "OK",
+            "confidence": 99.15,
+            "master_vendor": "PT Example Vendor"
+          }
+        },
+        "verification": {
+          "vendor_stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.5
+          },
+          "vendor_signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.1
+          },
+          "tmmin_stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.3
+          },
+          "tmmin_signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.9
+          }
+        },
+        "errors": [],
+        "document_summary": {
+          "result": "OK",
+          "confidence": 98.9,
+          "confidence_level": "Very High",
+          "total_validation": 6,
+          "mandatory_validation": 6,
+          "optional_validation": 0,
+          "passed_validation": 6,
+          "failed_validation": 0,
+          "failed_items": [],
+          "reason": "All mandatory validation items passed successfully.",
+          "recommendation": null
+        },
+        "ai_note": "Delivery Note successfully verified."
+      }
+    ]
+  },
+  "response_example_ok": {
+    "header": {
+      "message_version": "1.0",
+      "queue_no": "AIQ-20260630-000001",
+      "correlation_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "pv_no": "000123456",
+      "pv_year": "2026",
+      "request_source": "ELVIS",
+      "response_source": "AI Verification Service",
+      "overall_result": "OK",
+      "processing_status": "Completed",
+      "processing_result": "SUCCESS",
+      "ai_confidence": 98.62,
+      "ai_confidence_level": "Very High",
+      "confidence_method": "Average Mandatory Validation",
+      "processing": {
+        "request_datetime": "2026-06-30T09:30:00",
+        "start_datetime": "2026-06-30T09:30:01",
+        "finish_datetime": "2026-06-30T09:30:08",
+        "duration_ms": 7120
+      },
+      "model": {
+        "model_name": "ELVIS AI Verification",
+        "model_version": "v2.6.0",
+        "trained_date": "2026-06-15",
+        "training_dataset": "Dataset-202606",
+        "training_batch": "20260615-01"
+      },
+      "validation_rule": {
+        "rule_version": "v1.0",
+        "rule_date": "2026-06-10"
+      },
+      "errors": [],
+      "summary": {
+        "total_documents": 4,
+        "ok_documents": 4,
+        "ng_documents": 0,
+        "main_document": 2,
+        "second_document": 2,
+        "main_document_ok": 2,
+        "main_document_ng": 0,
+        "second_document_ok": 2,
+        "second_document_ng": 0
+      },
+      "validation_summary": {
+        "invoice": "OK",
+        "billing_document": "OK",
+        "delivery_note_1": "OK",
+        "delivery_note_2": "OK",
+        "duplicate_check": "OK",
+        "transaction_period": "OK"
+      },
+      "failed_documents": [],
+      "failed_validation_summary": {
+        "missing_materai": 0,
+        "invalid_stamp_colour": 0,
+        "missing_vendor_stamp": 0,
+        "duplicate_document": 0,
+        "transaction_period": 0,
+        "missing_signature": 0,
+        "amount_mismatch": 0
+      },
+      "ai_note": "AI Verification completed successfully. All submitted documents passed mandatory validation and business rule verification."
+    },
+    "documents": [
+      {
+        "document_id": "DOC-001",
+        "document_name": "invoice.pdf",
+        "document_type": "INVOICE",
+        "document_category": "MAIN_DOCUMENT",
+        "document_version": 1,
+        "page_count": 1,
+        "file_information": {
+          "file_name": "invoice.pdf",
+          "file_extension": "pdf",
+          "file_size": 582139,
+          "attachment_url": "https://image-server/elvis/000123456/invoice.pdf"
+        },
+        "processing_result": "SUCCESS",
+        "verification_datetime": "2026-06-30T09:30:05",
+        "ocr_engine": "ELVIS OCR Engine",
+        "ocr_version": "v1.4.0",
+        "ocr": {
+          "document_number": {
+            "value": "INV-2026-001",
+            "result": "OK",
+            "confidence": 99.82,
+            "bounding_box": [
+              210,
+              145,
+              620,
+              190
+            ]
+          },
+          "transaction_date": {
+            "value": "2026-06-20",
+            "result": "OK",
+            "confidence": 99.5,
+            "bounding_box": [
+              210,
+              220,
+              450,
+              260
+            ]
+          },
+          "transaction_time": {
+            "value": "10:30:00",
+            "result": "OK",
+            "confidence": 98.92,
+            "bounding_box": [
+              470,
+              220,
+              610,
+              260
+            ]
+          },
+          "vendor_name": {
+            "value": "PT Example Vendor",
+            "result": "OK",
+            "confidence": 98.75,
+            "bounding_box": [
+              210,
+              310,
+              690,
+              355
+            ],
+            "master_vendor": "PT Example Vendor"
+          },
+          "transaction_amount": {
+            "value": 5500000,
+            "result": "OK",
+            "confidence": 99.95,
+            "bounding_box": [
+              1080,
+              1320,
+              1430,
+              1375
+            ],
+            "pv_amount": 5500000,
+            "tolerance": 0
+          }
+        },
+        "verification": {
+          "signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.7,
+            "bounding_box": [
+              1185,
+              1450,
+              1518,
+              1762
+            ]
+          },
+          "stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.4,
+            "bounding_box": [
+              965,
+              1388,
+              1320,
+              1725
+            ]
+          },
+          "stamp_colour": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.6,
+            "detected_colour": "Blue",
+            "expected_colour": "Blue"
+          },
+          "materai": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.1
+          }
+        },
+        "duplicate_check": {
+          "result": "OK",
+          "confidence": 99.9,
+          "matched_document": null,
+          "matched_document_type": null,
+          "matched_pv": null,
+          "matched_date": null
+        },
+        "business_rule": {
+          "transaction_period": {
+            "rule": "Toll reimbursement transaction date must not exceed 2 months.",
+            "result": "OK"
+          },
+          "amount_validation": {
+            "rule": "Document amount must match PV amount.",
+            "result": "OK"
+          },
+          "vendor_validation": {
+            "rule": "Vendor name must match PV vendor name.",
+            "result": "OK"
+          }
+        },
+        "errors": [],
+        "document_summary": {
+          "result": "OK",
+          "confidence": 98.8,
+          "confidence_level": "Very High",
+          "total_validation": 9,
+          "mandatory_validation": 9,
+          "optional_validation": 0,
+          "passed_validation": 9,
+          "failed_validation": 0,
+          "failed_items": [],
+          "reason": "All mandatory validation items passed successfully.",
+          "recommendation": null
+        },
+        "ai_note": "INVOICE successfully verified."
+      },
+      {
+        "document_id": "BILL-001",
+        "document_name": "billing.pdf",
+        "document_type": "BILLING_DOCUMENT",
+        "document_category": "MAIN_DOCUMENT",
+        "document_version": 1,
+        "page_count": 1,
+        "file_information": {
+          "file_name": "billing.pdf",
+          "file_extension": "pdf",
+          "file_size": 431220,
+          "attachment_url": "https://image-server/elvis/000123456/billing.pdf"
+        },
+        "processing_result": "SUCCESS",
+        "verification_datetime": "2026-06-30T09:30:06",
+        "ocr_engine": "ELVIS OCR Engine",
+        "ocr_version": "v1.4.0",
+        "ocr": {
+          "document_number": {
+            "value": "BILL-2026-001",
+            "result": "OK",
+            "confidence": 99.55
+          },
+          "transaction_date": {
+            "value": "2026-06-21",
+            "result": "OK",
+            "confidence": 99.2
+          },
+          "transaction_time": {
+            "value": "11:15:00",
+            "result": "OK",
+            "confidence": 98.3
+          },
+          "vendor_name": {
+            "value": "PT Example Vendor",
+            "result": "OK",
+            "confidence": 98.9,
+            "master_vendor": "PT Example Vendor"
+          },
+          "transaction_amount": {
+            "value": 5500000,
+            "result": "OK",
+            "confidence": 99.8,
+            "pv_amount": 5500000,
+            "tolerance": 0
+          }
+        },
+        "verification": {
+          "signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.1
+          },
+          "stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.9
+          },
+          "stamp_colour": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.2,
+            "detected_colour": "Blue",
+            "expected_colour": "Blue"
+          },
+          "materai": {
+            "required": true,
+            "result": "OK",
+            "confidence": 97.9
+          }
+        },
+        "duplicate_check": {
+          "result": "OK",
+          "confidence": 99.6,
+          "matched_document": null,
+          "matched_document_type": null,
+          "matched_pv": null,
+          "matched_date": null
+        },
+        "business_rule": {
+          "transaction_period": {
+            "rule": "Other transaction date must not exceed 6 months.",
+            "result": "OK"
+          },
+          "amount_validation": {
+            "rule": "Document amount must match PV amount.",
+            "result": "OK"
+          },
+          "vendor_validation": {
+            "rule": "Vendor name must match PV vendor name.",
+            "result": "OK"
+          }
+        },
+        "errors": [],
+        "document_summary": {
+          "result": "OK",
+          "confidence": 98.8,
+          "confidence_level": "Very High",
+          "total_validation": 9,
+          "mandatory_validation": 9,
+          "optional_validation": 0,
+          "passed_validation": 9,
+          "failed_validation": 0,
+          "failed_items": [],
+          "reason": "All mandatory validation items passed successfully.",
+          "recommendation": null
+        },
+        "ai_note": "BILLING_DOCUMENT successfully verified."
+      },
+      {
+        "document_id": "DN-002",
+        "document_name": "delivery-note1.pdf",
+        "document_type": "DELIVERY_NOTE",
+        "document_category": "SECOND_DOCUMENT",
+        "document_version": 1,
+        "page_count": 1,
+        "file_information": {
+          "file_name": "delivery-note1.pdf",
+          "file_extension": "pdf",
+          "file_size": 390881,
+          "attachment_url": "https://image-server/elvis/000123456/delivery-note1.pdf"
+        },
+        "processing_result": "SUCCESS",
+        "verification_datetime": "2026-06-30T09:30:07",
+        "ocr_engine": "ELVIS OCR Engine",
+        "ocr_version": "v1.4.0",
+        "ocr": {
+          "document_number": {
+            "value": "DN-2026-001",
+            "result": "OK",
+            "confidence": 99.3
+          },
+          "vendor_name": {
+            "value": "PT Example Vendor",
+            "result": "OK",
+            "confidence": 99.1,
+            "master_vendor": "PT Example Vendor"
+          }
+        },
+        "verification": {
+          "vendor_stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.5
+          },
+          "vendor_signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.6
+          },
+          "tmmin_stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.2
+          },
+          "tmmin_signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.8
+          }
+        },
+        "errors": [],
+        "document_summary": {
+          "result": "OK",
+          "confidence": 98.8,
+          "confidence_level": "Very High",
+          "total_validation": 6,
+          "mandatory_validation": 6,
+          "optional_validation": 0,
+          "passed_validation": 6,
+          "failed_validation": 0,
+          "failed_items": [],
+          "reason": "All mandatory validation items passed successfully.",
+          "recommendation": null
+        },
+        "ai_note": "DELIVERY_NOTE successfully verified."
+      },
+      {
+        "document_id": "DN-003",
+        "document_name": "delivery-note2.pdf",
+        "document_type": "DELIVERY_NOTE",
+        "document_category": "SECOND_DOCUMENT",
+        "document_version": 1,
+        "page_count": 1,
+        "file_information": {
+          "file_name": "delivery-note2.pdf",
+          "file_extension": "pdf",
+          "file_size": 402112,
+          "attachment_url": "https://image-server/elvis/000123456/delivery-note2.pdf"
+        },
+        "processing_result": "SUCCESS",
+        "verification_datetime": "2026-06-30T09:30:08",
+        "ocr_engine": "ELVIS OCR Engine",
+        "ocr_version": "v1.4.0",
+        "ocr": {
+          "document_number": {
+            "value": "DN-2026-002",
+            "result": "OK",
+            "confidence": 99.4
+          },
+          "vendor_name": {
+            "value": "PT Example Vendor",
+            "result": "OK",
+            "confidence": 99.15,
+            "master_vendor": "PT Example Vendor"
+          }
+        },
+        "verification": {
+          "vendor_stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.5
+          },
+          "vendor_signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.1
+          },
+          "tmmin_stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.3
+          },
+          "tmmin_signature": {
+            "required": true,
+            "result": "OK",
+            "confidence": 98.9
+          }
+        },
+        "errors": [],
+        "document_summary": {
+          "result": "OK",
+          "confidence": 98.8,
+          "confidence_level": "Very High",
+          "total_validation": 6,
+          "mandatory_validation": 6,
+          "optional_validation": 0,
+          "passed_validation": 6,
+          "failed_validation": 0,
+          "failed_items": [],
+          "reason": "All mandatory validation items passed successfully.",
+          "recommendation": null
+        },
+        "ai_note": "DELIVERY_NOTE successfully verified."
+      }
+    ]
+  }
+}

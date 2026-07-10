@@ -1,0 +1,38 @@
+{
+  "message_version": "1.0",
+  "queue_no": "AIQ-20260630-000001",
+  "correlation_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "pv_no": "000123456",
+  "pv_year": "2026",
+  "transaction_type": "REIMBURSEMENT_TOLL",
+  "vendor_code": "VDR001",
+  "vendor_name": "PT Example Vendor",
+  "total_amount": 5500000,
+  "created_datetime": "2026-06-30T09:30:00",
+  "documents": [
+    {
+      "document_id": "DOC-001",
+      "document_type": "INVOICE",
+      "document_category": "MAIN_DOCUMENT",
+      "attachment_url": "https://image-server/elvis/000123456/invoice.pdf"
+    },
+    {
+      "document_id": "BILL-001",
+      "document_type": "BILLING_DOCUMENT",
+      "document_category": "MAIN_DOCUMENT",
+      "attachment_url": "https://image-server/elvis/000123456/billing.pdf"
+    },
+    {
+      "document_id": "DN-002",
+      "document_type": "DELIVERY_NOTE",
+      "document_category": "SECOND_DOCUMENT",
+      "attachment_url": "https://image-server/elvis/000123456/delivery-note1.pdf"
+    },
+    {
+      "document_id": "DN-003",
+      "document_type": "DELIVERY_NOTE",
+      "document_category": "SECOND_DOCUMENT",
+      "attachment_url": "https://image-server/elvis/000123456/delivery-note2.pdf"
+    }
+  ]
+}
