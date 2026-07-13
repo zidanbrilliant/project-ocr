@@ -54,5 +54,3 @@ class ModelVersionResponse(BaseModel):
     barcode: dict[str, Any] = Field(default_factory=lambda: {"engine": "zxing-cpp", "version": "2.x"})
 
 
-class ErrorResponse(BaseModel):
-    error: dict[str, Any] = Field(default_factory=lambda: {"code": "UNKNOWN", "message": "An error occurred."})

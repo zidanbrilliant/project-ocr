@@ -228,13 +228,10 @@ class AIPipelineOrchestrator:
 
             preprocessed = [self._preprocessor.preprocess(img) for img in page_images]
 
-            # YOLO batch all pages
+            # ponytail: local input_size override, not mutating global settings
             raw_detections = await self._yolo.detect_batch(preprocessed)
             if not raw_detections and preprocessed:
-                old = settings.YOLO_INPUT_SIZE
-                settings.YOLO_INPUT_SIZE = 960
-                raw_detections = await self._yolo.detect_batch(preprocessed)
-                settings.YOLO_INPUT_SIZE = old
+                raw_detections = await self._yolo.detect_batch(preprocessed, input_size=960)
 
             # Page processing: OCR + barcode with concurrency limit
             page_sem = asyncio.Semaphore(settings.MAX_PARALLEL_PAGES)

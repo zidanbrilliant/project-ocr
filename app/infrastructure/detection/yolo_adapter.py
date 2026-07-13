@@ -35,7 +35,7 @@ class YOLOAdapter:
     async def detect(self, image_bytes: bytes) -> list[dict[str, Any]]:
         return await self.detect_batch([image_bytes])
 
-    async def detect_batch(self, image_bytes_list: list[bytes]) -> list[dict[str, Any]]:
+    async def detect_batch(self, image_bytes_list: list[bytes], input_size: int | None = None) -> list[dict[str, Any]]:
         if not self._loaded:
             return []
 
@@ -52,7 +52,7 @@ class YOLOAdapter:
 
             results = self._model.predict(
                 imgs,
-                imgsz=settings.YOLO_INPUT_SIZE,
+                imgsz=input_size or settings.YOLO_INPUT_SIZE,
                 conf=settings.YOLO_CONFIDENCE_THRESHOLD,
                 iou=settings.YOLO_NMS_THRESHOLD,
                 device=DEVICE,
