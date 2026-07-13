@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     YOLO_MODEL_PATH: str = "./models/best-v5.pt"
     YOLO_INPUT_SIZE: int = 640
-    YOLO_CONFIDENCE_THRESHOLD: float = 0.25
+    YOLO_CONFIDENCE_THRESHOLD: float = 0.40
     YOLO_NMS_THRESHOLD: float = 0.45
 
     OCR_ENGINE: str = "paddleocr_vl"

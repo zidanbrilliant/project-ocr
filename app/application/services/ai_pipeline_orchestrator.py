@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from datetime import datetime
@@ -6,7 +7,7 @@ from typing import Any
 from aio_pika.abc import AbstractIncomingMessage
 
 from app.application.dto.input_payload_dto import InputPayloadDTO
-from app.application.services.ai_notes_service import AINotesService
+
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.document_error_builder import build_document_error_result
 from app.application.services.field_extraction_service import FieldExtractionService
@@ -18,7 +19,6 @@ from app.infrastructure.barcode.barcode_fallback_chain import BarcodeFallbackCha
 from app.infrastructure.database.repositories.ai_job_postgres_repository import AIJobPostgresRepository
 from app.infrastructure.database.repositories.audit_log_postgres_repository import AuditLogPostgresRepository
 from app.infrastructure.database.repositories.result_postgres_repository import ResultPostgresRepository
-from app.infrastructure.detection.detection_fallback import DetectionFallback
 from app.infrastructure.detection.detection_mapper import aggregate_per_object_type, map_to_entity
 from app.infrastructure.detection.yolo_adapter import YOLOAdapter
 from app.infrastructure.document_converter.document_validator import DocumentValidator
@@ -26,7 +26,6 @@ from app.infrastructure.document_converter.image_preprocessor import ImagePrepro
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
 from app.infrastructure.document_converter.word_converter import WordConverter
 from app.infrastructure.ocr.ocr_fallback_chain import OCRFallbackChain
-from app.infrastructure.ocr.paddleocr_vl_adapter import PaddleOCRVLAdapter
 from app.infrastructure.rabbitmq.publisher import ResultPublisher
 from app.infrastructure.rabbitmq.retry import RetryHandler
 from app.infrastructure.storage.image_server_client import ImageServerClient
@@ -57,13 +56,11 @@ class AIPipelineOrchestrator:
         preprocessor: ImagePreprocessor,
         ocr_chain: OCRFallbackChain,
         yolo: YOLOAdapter,
-        detection_fallback: DetectionFallback,
         barcode_chain: BarcodeFallbackChain,
         validator: DocumentValidator,
         field_extractor: FieldExtractionService,
         rule_evaluator: BusinessRuleEvaluator,
         confidence_scorer: ConfidenceScoringService,
-        notes_service: AINotesService,
         remark_policy: RemarkPolicy,
     ) -> None:
         self._job_repo = job_repo
@@ -78,13 +75,11 @@ class AIPipelineOrchestrator:
         self._preprocessor = preprocessor
         self._ocr_chain = ocr_chain
         self._yolo = yolo
-        self._detection_fallback = detection_fallback
         self._barcode_chain = barcode_chain
         self._validator = validator
         self._field_extractor = field_extractor
         self._rule_evaluator = rule_evaluator
         self._confidence_scorer = confidence_scorer
-        self._notes_service = notes_service
         self._remark_policy = remark_policy
 
     async def process(self, payload: dict[str, Any], msg: AbstractIncomingMessage) -> None:
@@ -136,16 +131,57 @@ class AIPipelineOrchestrator:
 
             preprocessed = [self._preprocessor.preprocess(img) for img in page_images]
 
-            best_page = preprocessed[0] if preprocessed else b""
-            ocr_result = await self._ocr_chain.run(preprocessed[0] if preprocessed else file_content, preprocessed[0] if preprocessed else None)
+            # ponytail: batch YOLO all pages, OCR + barcode per page parallel
+            from app.shared.constants.doc_types import DN
+
+            async def _process_page(pp_img: bytes) -> tuple[dict, dict]:
+                ocr = await self._ocr_chain.run(pp_img, pp_img, extension=ext)
+                bc = await self._barcode_chain.read(pp_img)
+                return ocr, bc
+
+            page_tasks = [_process_page(pp) for pp in preprocessed]
+            raw_detections, page_results = await asyncio.gather(
+                self._yolo.detect_batch(preprocessed),
+                asyncio.gather(*page_tasks),
+            )
+            # ponytail: one retry with larger input if YOLO found nothing
+            if not raw_detections and preprocessed:
+                old = settings.YOLO_INPUT_SIZE
+                settings.YOLO_INPUT_SIZE = 960
+                raw_detections = await self._yolo.detect_batch(preprocessed)
+                settings.YOLO_INPUT_SIZE = old
+            ocr_results, barcode_results = zip(*page_results) if page_results else ([], [])
+
+            # Aggregate OCR across all pages
+            all_text = "\n".join(r.get("raw_text", "") or "" for r in ocr_results if r.get("raw_text"))
+            all_tokens = []
+            conf_sum = 0.0; conf_cnt = 0
+            for r in ocr_results:
+                for t in (r.get("tokens_json") or []):
+                    all_tokens.append(t)
+                c = r.get("average_confidence")
+                if c is not None:
+                    conf_sum += c; conf_cnt += 1
+            ocr_result = {
+                "engine_name": ocr_results[0].get("engine_name", "easyocr") if ocr_results else "none",
+                "raw_text": all_text,
+                "tokens_json": all_tokens,
+                "average_confidence": round(conf_sum / max(conf_cnt, 1), 2),
+            }
+
+            # Take first successful barcode
+            barcode_result = {"barcode_found": False, "barcode_decoded": False}
+            for bc in barcode_results:
+                if bc.get("barcode_decoded"):
+                    barcode_result = bc; break
+                if bc.get("barcode_found") and not barcode_result.get("barcode_found"):
+                    barcode_result = bc
+
             await self._audit.log(job_id, queue_id, "worker", "ocr_completed", after={"engine": ocr_result.get("engine_name")})
 
-            raw_detections = await self._detection_fallback.run_with_fallback(best_page or page_images[0])
             detections = [map_to_entity(d) for d in raw_detections]
             aggregated = aggregate_per_object_type(detections)
             await self._audit.log(job_id, queue_id, "worker", "detection_completed")
-
-            barcode_result = await self._barcode_chain.read(best_page or page_images[0])
             await self._audit.log(job_id, queue_id, "worker", "barcode_completed")
 
             doc_pk = await self._result_repo.save_document(job_id, {
@@ -167,28 +203,27 @@ class AIPipelineOrchestrator:
             if fields.get("transaction_amount"):
                 amount = fields["transaction_amount"].get("value")
 
-            validation = self._rule_evaluator.validate_invoice(
-                ocr=self._ocr_entity(ocr_result),
-                detections=list(aggregated.values()),
-                amount=amount,
-                confidence=ocr_result.get("average_confidence"),
-            )
-
-            barcode_decoded = barcode_result.get("barcode_decoded", False)
-            barcode_found = barcode_result.get("barcode_found", False)
-            barcode_conf = 100.0 if barcode_decoded else (70.0 if barcode_found else 0.0)
+            if dto.DOC_TYPE == DN:
+                validation = self._rule_evaluator.validate_delivery_note(detections=list(aggregated.values()))
+            else:
+                validation = self._rule_evaluator.validate_invoice(
+                    ocr=self._ocr_entity(ocr_result),
+                    detections=list(aggregated.values()),
+                    amount=amount,
+                    confidence=ocr_result.get("average_confidence"),
+                )
 
             total_confidence = self._confidence_scorer.calculate(
                 ocr_result=ocr_result,
                 detections=raw_detections,
                 barcode_result=barcode_result,
                 document_info=doc_info,
-                image_bytes=best_page or page_images[0] if page_images else None,
+                image_bytes=preprocessed[0] if preprocessed else None,
             )
 
             passed = validation.passed and total_confidence >= settings.CONFIDENCE_THRESHOLD
             overall = statuses.OK if passed else statuses.NG
-            remark = self._notes_service.generate_remark(validation)
+            remark = self._remark_policy.generate(validation)
 
             finish_dt = datetime.utcnow()
             duration_ms = int((finish_dt - start_dt).total_seconds() * 1000)

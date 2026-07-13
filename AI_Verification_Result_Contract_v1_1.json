@@ -1,0 +1,401 @@
+{
+  "contract_name": "ELVIS AI Verification Contract v1.1 — Multi-Page Support",
+  "contract_version": "1.1.0",
+  "backward_compatible": true,
+  "summary": "Additive page-level result. All v1 fields remain. New: documents[].pages[] with per-page OCR, detections, barcodes, fields, quality, timings, errors.",
+
+  "response_example_single_doc_ng": {
+    "header": {
+      "message_version": "1.0",
+      "queue_no": "AIQ-20260630-000001",
+      "correlation_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "response_schema_version": "1.1.0",
+      "pv_no": "000123456",
+      "pv_year": "2026",
+      "request_source": "ELVIS",
+      "response_source": "AI Verification Service",
+      "overall_result": "NG",
+      "processing_status": "Completed",
+      "processing_result": "SUCCESS",
+      "ai_confidence": 82.45,
+      "ai_confidence_level": "Medium",
+      "processing": {
+        "request_datetime": "2026-06-30T09:30:00",
+        "start_datetime": "2026-06-30T09:30:01",
+        "finish_datetime": "2026-06-30T09:30:08",
+        "duration_ms": 7120
+      },
+      "model": {
+        "model_name": "ELVIS AI Verification",
+        "model_version": "v2.6.0",
+        "trained_date": "2026-06-15"
+      },
+      "models": {
+        "object_detection": {
+          "engine": "Ultralytics YOLO",
+          "framework": "ultralytics",
+          "model_name": "best-v5.pt",
+          "model_version": "sesi_4",
+          "device": "cuda:0",
+          "input_size": 640,
+          "confidence_threshold": 0.25,
+          "nms_threshold": 0.45,
+          "classes": {
+            "0": "barcode",
+            "1": "materai",
+            "2": "signature",
+            "3": "stamp"
+          }
+        },
+        "ocr": {
+          "engine": "EasyOCR",
+          "provider": "easyocr",
+          "version": "1.7.2",
+          "device": "cuda:0",
+          "languages": ["en", "id"],
+          "batch_size": 4
+        },
+        "barcode": {
+          "primary": "zxing-cpp",
+          "fallback": ["pyzbar", "opencv"],
+          "decoders": ["zxing-cpp", "pyzbar", "opencv"]
+        }
+      },
+      "summary": {
+        "total_documents": 1,
+        "ok_documents": 0,
+        "ng_documents": 1,
+        "main_document": 1,
+        "second_document": 0
+      },
+      "errors": [],
+      "ai_note": "Invoice missing stamp duty above threshold."
+    },
+
+    "documents": [
+      {
+        "document_id": "DOC-001",
+        "document_index": 0,
+        "document_name": "INV-2026-001.pdf",
+        "document_type": "INVOICE",
+        "document_category": "MAIN_DOCUMENT",
+        "processing_result": "SUCCESS",
+        "processing_status": "COMPLETED",
+        "page_count": 2,
+        "processing_time_ms": 8200,
+        "file_information": {
+          "file_name": "INV-2026-001.pdf",
+          "file_extension": ".pdf",
+          "content_type": "application/pdf",
+          "file_size_bytes": 384409,
+          "checksum_sha256": "e3b0c44298fc1c14..."
+        },
+
+        "ocr": {
+          "status": "SUCCESS",
+          "engine": "EasyOCR",
+          "provider": "easyocr",
+          "version": "1.7.2",
+          "device": "cuda:0",
+          "languages": ["en", "id"],
+          "raw_text": "INVOICE\nNO: INV-2026-001\nDate: 2026-06-20\nVendor: PT Example\nTotal: Rp 7.500.000\n...",
+          "average_confidence": 0.934
+        },
+
+        "verification": {
+          "signature": {
+            "required": true,
+            "result": "NG",
+            "confidence": 34.25,
+            "bounding_box": { "pixel_xyxy": [], "normalized_xyxy": [], "pdf_points_xyxy": [] },
+            "count": 0
+          },
+          "stamp": {
+            "required": true,
+            "result": "OK",
+            "confidence": 99.40,
+            "count": 1
+          },
+          "stamp_colour": {
+            "required": true,
+            "result": "NG",
+            "confidence": 61.80,
+            "detected_colour": "Black"
+          },
+          "materai": {
+            "required": true,
+            "result": "NG",
+            "confidence": 2.50,
+            "count": 0
+          }
+        },
+
+        "duplicate_check": {
+          "result": "NG",
+          "confidence": 99.90,
+          "matched_document": "INV-2026-001",
+          "matched_pv": "000118932",
+          "matched_date": "2026-05-28",
+          "reason": "Duplicate invoice within 6 months."
+        },
+
+        "business_rule": {
+          "rule_version": "v1.0",
+          "rules_passed": 4,
+          "rules_failed": 5,
+          "rules": [
+            { "rule_id": "INV-R004", "rule_name": "Materai required above threshold", "result": "FAILED", "reason": "Materai not detected." },
+            { "rule_id": "INV-R005", "rule_name": "Company stamp required", "result": "PASSED" },
+            { "rule_id": "INV-R006", "rule_name": "Signature required", "result": "FAILED", "reason": "Signature not detected." }
+          ]
+        },
+
+        "document_summary": {
+          "result": "NG",
+          "total_validation": 9,
+          "passed_validation": 4,
+          "failed_validation": 5,
+          "failed_items": ["Transaction Date", "Vendor Signature", "Stamp Colour", "Materai", "Duplicate Check"],
+          "reason": "Five mandatory validation items failed.",
+          "recommendations": [
+            "Upload invoice with valid Materai.",
+            "Ensure vendor signature clearly visible.",
+            "Use official company stamp with required colour.",
+            "Verify reimbursement transaction date.",
+            "Confirm invoice not previously submitted."
+          ]
+        },
+
+        "pages": [
+          {
+            "page_index": 0,
+            "page_number": 1,
+            "document_id": "DOC-001",
+            "processing_result": "SUCCESS",
+            "processing_status": "COMPLETED",
+            "started_at": "2026-06-30T09:30:03.100Z",
+            "finished_at": "2026-06-30T09:30:05.200Z",
+            "duration_ms": 2100,
+
+            "image": {
+              "width": 1654,
+              "height": 2339,
+              "dpi": 200,
+              "rotation": 0,
+              "page_width_pt": 595.0,
+              "page_height_pt": 842.0,
+              "text_layer_detected": true,
+              "artifact_uri": null
+            },
+
+            "ocr": {
+              "status": "SUCCESS",
+              "engine": "EasyOCR",
+              "provider": "easyocr",
+              "version": "1.7.2",
+              "device": "cuda:0",
+              "languages": ["en", "id"],
+              "raw_text": "INVOICE\nNO: INV-2026-001\nDate: 2026-06-20\nVendor: PT Example\nTotal: Rp 7.500.000\n...",
+              "average_confidence": 0.951,
+              "duration_ms": 1542,
+              "text_blocks": [
+                {
+                  "block_index": 0,
+                  "text": "INVOICE",
+                  "confidence": 0.98,
+                  "polygon": { "pixel_xyxy": [120, 45, 320, 85], "normalized_xyxy": [0.072, 0.019, 0.193, 0.036] }
+                },
+                {
+                  "block_index": 1,
+                  "text": "NO: INV-2026-001",
+                  "confidence": 0.96,
+                  "polygon": { "pixel_xyxy": [370, 45, 680, 85], "normalized_xyxy": [0.223, 0.019, 0.411, 0.036] }
+                }
+              ]
+            },
+
+            "detections": [
+              {
+                "detection_id": "DET-page1-0001",
+                "class_id": 3,
+                "label": "stamp",
+                "confidence": 0.994,
+                "page_index": 0,
+                "page_number": 1,
+                "bounding_box": {
+                  "pixel_xyxy": [965, 1388, 1320, 1725],
+                  "normalized_xyxy": [0.583, 0.593, 0.798, 0.737],
+                  "pdf_points_xyxy": [347, 500, 475, 621]
+                },
+                "model_name": "best-v5.pt",
+                "model_version": "sesi_4",
+                "threshold_used": 0.25
+              }
+            ],
+
+            "barcodes": [
+              {
+                "detected": false,
+                "decoded": false,
+                "symbology": null,
+                "value": null,
+                "confidence": null,
+                "decoder": null,
+                "bounding_box": null,
+                "source_page": 1,
+                "error": null
+              }
+            ],
+
+            "extracted_fields": [
+              {
+                "field_name": "document_number",
+                "value": "INV-2026-001",
+                "raw_value": "INV-2026-001",
+                "data_type": "string",
+                "confidence": 0.92,
+                "source_page_index": 0,
+                "source_page_number": 1,
+                "source_text": "NO: INV-2026-001",
+                "extraction_method": "regex"
+              },
+              {
+                "field_name": "transaction_amount",
+                "value": 7500000,
+                "raw_value": "Rp 7.500.000",
+                "data_type": "float",
+                "confidence": 0.89,
+                "source_page_index": 0,
+                "source_page_number": 1,
+                "source_text": "Total: Rp 7.500.000",
+                "extraction_method": "regex"
+              }
+            ],
+
+            "document_quality": {
+              "readable": true,
+              "resolution_score": 98.0,
+              "blur_score": 85.0,
+              "brightness_score": 92.0,
+              "contrast_score": 88.0,
+              "orientation": "0",
+              "text_layer_detected": true,
+              "rerendered_at_higher_dpi": false
+            },
+
+            "timings_ms": {
+              "render": 210,
+              "preprocessing": 32,
+              "yolo_queue_wait": 9,
+              "yolo_inference": 41,
+              "ocr_queue_wait": 15,
+              "ocr_inference": 1542,
+              "barcode_decoding": 45,
+              "field_extraction": 12,
+              "postprocessing": 8,
+              "total": 1914
+            },
+
+            "errors": []
+          },
+
+          {
+            "page_index": 1,
+            "page_number": 2,
+            "document_id": "DOC-001",
+            "processing_result": "PARTIAL_SUCCESS",
+            "processing_status": "COMPLETED",
+            "started_at": "2026-06-30T09:30:05.300Z",
+            "finished_at": "2026-06-30T09:30:06.100Z",
+            "duration_ms": 800,
+
+            "image": {
+              "width": 1654,
+              "height": 2339,
+              "dpi": 200,
+              "rotation": 0,
+              "page_width_pt": 595.0,
+              "page_height_pt": 842.0,
+              "text_layer_detected": false,
+              "artifact_uri": null
+            },
+
+            "ocr": {
+              "status": "FAILED",
+              "engine": "EasyOCR",
+              "provider": "easyocr",
+              "version": "1.7.2",
+              "device": "cuda:0",
+              "languages": ["en", "id"],
+              "raw_text": null,
+              "average_confidence": null,
+              "duration_ms": null,
+              "text_blocks": [],
+              "error": {
+                "code": "OCR_EMPTY_RESULT",
+                "message": "OCR returned no text for this page"
+              }
+            },
+
+            "detections": [
+              {
+                "detection_id": "DET-page2-0001",
+                "class_id": 2,
+                "label": "signature",
+                "confidence": 0.921,
+                "page_index": 1,
+                "page_number": 2,
+                "bounding_box": {
+                  "pixel_xyxy": [1185, 1450, 1518, 1762],
+                  "normalized_xyxy": [0.716, 0.620, 0.918, 0.753],
+                  "pdf_points_xyxy": [426, 522, 546, 634]
+                },
+                "model_name": "best-v5.pt",
+                "model_version": "sesi_4",
+                "threshold_used": 0.25
+              }
+            ],
+
+            "barcodes": [],
+            "extracted_fields": [],
+            "document_quality": {},
+            "timings_ms": { "render": 190, "yolo_inference": 38, "ocr_inference": null, "total": 800 },
+
+            "errors": [
+              {
+                "stage": "OCR",
+                "code": "OCR_EMPTY_RESULT",
+                "message": "EasyOCR returned no text for page 2",
+                "retryable": false,
+                "attempt": 1,
+                "timestamp": "2026-06-30T09:30:06.000Z"
+              }
+            ]
+          }
+        ],
+
+        "errors": []
+      }
+    ]
+  },
+
+  "result_delivery_modes": {
+    "INLINE": "Full detail in RabbitMQ (default, up to MAX_RABBITMQ_RESULT_BYTES)",
+    "HYBRID": "Summary in RabbitMQ, full detail in object storage with artifact URI",
+    "REFERENCE": "Summary only in RabbitMQ, artifact URI for full detail"
+  },
+
+  "environment_reference": {
+    "RESULT_SCHEMA_VERSION": "1.1.0",
+    "RESULT_DELIVERY_MODE": "INLINE",
+    "MAX_RABBITMQ_RESULT_BYTES": 5242880,
+    "RESULT_OBJECT_STORAGE_ENABLED": false,
+    "OCR_LANGUAGES": "en,id",
+    "GPU_CONCURRENCY": 1,
+    "PAGE_QUEUE_SIZE": 32,
+    "YOLO_QUEUE_SIZE": 32,
+    "OCR_QUEUE_SIZE": 16,
+    "TEMP_ROOT_DIR": "/tmp/ai-processing",
+    "KEEP_DEBUG_ARTIFACTS": false
+  }
+}

@@ -1,7 +1,6 @@
 import asyncio
 import signal
 
-from app.application.services.ai_notes_service import AINotesService
 from app.application.services.ai_pipeline_orchestrator import AIPipelineOrchestrator
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
@@ -15,19 +14,15 @@ from app.infrastructure.database.repositories.ai_job_postgres_repository import 
 from app.infrastructure.database.repositories.audit_log_postgres_repository import AuditLogPostgresRepository
 from app.infrastructure.database.repositories.result_postgres_repository import ResultPostgresRepository
 from app.infrastructure.database.session import async_session_factory
-from app.infrastructure.detection.detection_fallback import DetectionFallback
 from app.infrastructure.detection.yolo_adapter import YOLOAdapter
 from app.infrastructure.document_converter.document_validator import DocumentValidator
 from app.infrastructure.document_converter.image_preprocessor import ImagePreprocessor
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
 from app.infrastructure.document_converter.word_converter import WordConverter
-from app.infrastructure.ocr.easyocr_adapter import EasyOCRLAdapter
+from app.infrastructure.ocr.document_ocr import DocumentOCR
 from app.infrastructure.ocr.ocr_fallback_chain import OCRFallbackChain
-from app.infrastructure.ocr.paddleocr_vl_adapter import PaddleOCRVLAdapter
-from app.infrastructure.ocr.tesseract_adapter import TesseractAdapter
 from app.infrastructure.rabbitmq.connection import RabbitMQConnection
 from app.infrastructure.rabbitmq.consumer import InvoiceRequestConsumer
-from app.infrastructure.rabbitmq.dlq import DLQHandler
 from app.infrastructure.rabbitmq.publisher import ResultPublisher
 from app.infrastructure.rabbitmq.retry import RetryHandler
 from app.infrastructure.rabbitmq.topology import declare_topology
@@ -66,22 +61,20 @@ class WorkerMain:
         field_extractor = FieldExtractionService()
         rule_eval = BusinessRuleEvaluator()
         conf_scorer = ConfidenceScoringService()
-        notes = AINotesService()
         remark = RemarkPolicy()
 
-        ocr_primary = PaddleOCRVLAdapter()
+        ocr_primary = DocumentOCR()
         try:
             await ocr_primary.warmup()
         except Exception as e:
             logger.warning("ocr_warmup_failed", error=str(e))
-        ocr_chain = OCRFallbackChain(ocr_primary, EasyOCRLAdapter(), TesseractAdapter())
+        ocr_chain = OCRFallbackChain(ocr_primary)
 
         yolo = YOLOAdapter()
         try:
             await yolo.warmup()
         except Exception as e:
             logger.warning("yolo_warmup_failed", error=str(e))
-        det_fallback = DetectionFallback(yolo)
 
         barcode_chain = BarcodeFallbackChain(ZXingAdapter(), PyzbarAdapter(), OpenCVBarcodeAdapter())
 
@@ -91,7 +84,6 @@ class WorkerMain:
             audit = AuditLogPostgresRepository(session)
             publisher = ResultPublisher(self._rmq)
             retry = RetryHandler(self._rmq)
-            dlq = DLQHandler(self._rmq)
 
             orchestrator = AIPipelineOrchestrator(
                 job_repo=job_repo, result_repo=result_repo, audit=audit,
@@ -99,10 +91,10 @@ class WorkerMain:
                 file_client=self._file_client, temp_mgr=temp_mgr,
                 pdf_renderer=pdf_renderer, word_converter=word_converter,
                 preprocessor=preprocessor, ocr_chain=ocr_chain,
-                yolo=yolo, detection_fallback=det_fallback,
+                yolo=yolo,
                 barcode_chain=barcode_chain, validator=validator,
                 field_extractor=field_extractor, rule_evaluator=rule_eval,
-                confidence_scorer=conf_scorer, notes_service=notes,
+                confidence_scorer=conf_scorer,
                 remark_policy=remark,
             )
 

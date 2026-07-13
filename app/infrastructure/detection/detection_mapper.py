@@ -6,7 +6,7 @@ from app.shared.constants.statuses import NG, OK
 
 def map_to_entity(detection: dict[str, Any], required: bool = True) -> DetectionResult:
     conf = detection.get("confidence", 0)
-    result = OK if conf is not None and conf >= 25 else NG
+    result = OK if conf is not None and conf >= 40 else NG
 
     return DetectionResult(
         page_number=detection.get("page_number", 1),

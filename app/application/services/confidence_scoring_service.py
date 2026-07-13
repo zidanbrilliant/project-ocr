@@ -32,16 +32,13 @@ class ConfidenceScoringService:
 
         barcode_required = settings.REQUIRE_BARCODE_FOR_INVOICE
         barcode_decoded = barcode_result.get("barcode_decoded", False)
-        barcode_found = barcode_result.get("barcode_found", False)
-
-        if barcode_required and barcode_decoded:
+        # ponytail: use real decoder confidence instead of hardcoded 100/70/0
+        barcode_confidence = barcode_result.get("barcode_confidence", 0.0) or 0.0
+        if not barcode_required:
             barcode_confidence = 100.0
-        elif barcode_required and barcode_found:
-            barcode_confidence = 70.0
-        elif barcode_required:
-            barcode_confidence = 0.0
-        else:
-            barcode_confidence = 100.0
+        elif not barcode_decoded:
+            barcode_decoder_err = not barcode_result.get("barcode_found", False)
+            barcode_confidence = 0.0 if barcode_decoder_err else 30.0
 
         quality_score = self._compute_quality(document_info, image_bytes)
 

@@ -12,13 +12,11 @@ import numpy as np
 import cv2
 
 from scripts.direct_processor import DirectProcessor
-from scripts.streamlit_processor import StreamlitProcessor
 from scripts.result_adapter import normalize_pipeline_result_for_ui
 
 st.set_page_config(page_title="Vision AI", page_icon="🔍", layout="wide")
 
 DOC_TYPES = {"INV": "Invoice", "DN": "Delivery Note"}
-PROCESSOR_MODES = {"Parallel (New Architecture)": "parallel"}
 
 DEFAULT_STATE = {
     "raw_result": None,
@@ -46,12 +44,8 @@ def clear_processing_state():
 
 
 @st.cache_resource(show_spinner=False)
-def get_processor(mode: str):
-    if mode == "direct":
-        p = DirectProcessor()
-    else:
-        p = StreamlitProcessor()
-    return p
+def get_processor():
+    return DirectProcessor()
 
 
 def draw_bboxes(img: np.ndarray, detections: list[dict], color=(0, 255, 0)) -> np.ndarray:
@@ -72,8 +66,6 @@ async def main_ui():
     st.title("🔍 Vision AI — Document Inspector")
 
     with st.sidebar:
-        mode_label = st.selectbox("Processor Mode", options=list(PROCESSOR_MODES.keys()), index=0)
-        mode = PROCESSOR_MODES[mode_label]
         if st.button("Clear Results"):
             clear_processing_state()
 
@@ -89,7 +81,7 @@ async def main_ui():
 
         if st.button("🚀 Process", type="primary", disabled=uploaded is None):
             with st.spinner("Processing..."):
-                p = get_processor(mode)
+                p = get_processor()
                 if not getattr(p, "_warmed_up", False):
                     await p.warmup()
 

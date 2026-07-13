@@ -17,7 +17,6 @@ from app.infrastructure.barcode.barcode_fallback_chain import BarcodeFallbackCha
 from app.infrastructure.barcode.opencv_barcode_adapter import OpenCVBarcodeAdapter
 from app.infrastructure.barcode.pyzbar_adapter import PyzbarAdapter
 from app.infrastructure.barcode.zxing_adapter import ZXingAdapter
-from app.infrastructure.detection.detection_fallback import DetectionFallback
 from app.infrastructure.detection.detection_mapper import aggregate_per_object_type, map_to_entity
 from app.infrastructure.detection.yolo_adapter import YOLOAdapter
 from app.infrastructure.document_converter.document_validator import DocumentValidator
@@ -32,7 +31,7 @@ from app.shared.exceptions.base import DocumentError
 from app.shared.logging.logger import get_logger, setup_logging
 from app.application.services.field_extraction_service import FieldExtractionService
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
-from app.application.services.ai_notes_service import AINotesService
+
 
 logger = get_logger(__name__)
 
@@ -46,7 +45,6 @@ class DirectProcessor:
         self._field_extractor = FieldExtractionService()
         self._rule_evaluator = BusinessRuleEvaluator()
         self._conf_scorer = ConfidenceScoringService()
-        self._notes = AINotesService()
         self._remark = RemarkPolicy()
         self._temp_mgr = TempFileManager()
 
@@ -54,7 +52,6 @@ class DirectProcessor:
         self._ocr_chain = OCRFallbackChain(self._ocr)
 
         self._yolo = YOLOAdapter()
-        self._det_fallback = DetectionFallback(self._yolo)
 
         self._barcode_chain = BarcodeFallbackChain(
             ZXingAdapter(), PyzbarAdapter(), OpenCVBarcodeAdapter()
@@ -225,7 +222,7 @@ class DirectProcessor:
 
             passed = validation.passed and total_conf >= settings.CONFIDENCE_THRESHOLD
             overall = statuses.OK if passed else statuses.NG
-            remark = self._notes.generate_remark(validation)
+            remark = self._remark.generate(validation)
 
             confidence_level = ConfidenceScore.level(total_conf)
 
