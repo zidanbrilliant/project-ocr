@@ -12,5 +12,5 @@ class JobProcessor:
         self._orchestrator = orchestrator
 
     async def handle(self, payload: dict[str, Any], message: AbstractIncomingMessage) -> None:
-        logger.info("job_processing_started", doc_no=payload.get("DOC_NO"))
+        logger.info("job_processing_started", has_documents="documents" in payload and isinstance(payload.get("documents"), list))
         await self._orchestrator.process(payload, message)

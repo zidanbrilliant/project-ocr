@@ -16,7 +16,7 @@ async def reset():
         logger.info("creating_all_tables")
         await conn.run_sync(Base.metadata.create_all)
     logger.info("database_reset_complete")
-    print("DONE — 13 tables created:")
+    print("DONE — tables created:")
     for table in Base.metadata.sorted_tables:
         print(f"  {table.name}")
 

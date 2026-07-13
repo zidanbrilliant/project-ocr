@@ -23,6 +23,7 @@ from app.infrastructure.ocr.document_ocr import DocumentOCR
 from app.infrastructure.ocr.ocr_fallback_chain import OCRFallbackChain
 from app.infrastructure.rabbitmq.connection import RabbitMQConnection
 from app.infrastructure.rabbitmq.consumer import InvoiceRequestConsumer
+from app.infrastructure.rabbitmq.outbox_publisher import OutboxPublisher
 from app.infrastructure.rabbitmq.publisher import ResultPublisher
 from app.infrastructure.rabbitmq.retry import RetryHandler
 from app.infrastructure.rabbitmq.topology import declare_topology
@@ -47,6 +48,7 @@ class WorkerMain:
         self._rmq = RabbitMQConnection()
         self._consumer: InvoiceRequestConsumer | None = None
         self._file_client: ImageServerClient | None = None
+        self._outbox: OutboxPublisher | None = None
 
     async def run(self) -> None:
         setup_logging()
@@ -91,14 +93,17 @@ class WorkerMain:
                 file_client=self._file_client, temp_mgr=temp_mgr,
                 pdf_renderer=pdf_renderer, word_converter=word_converter,
                 preprocessor=preprocessor, ocr_chain=ocr_chain,
-                yolo=yolo,
-                barcode_chain=barcode_chain, validator=validator,
+                yolo=yolo, barcode_chain=barcode_chain, validator=validator,
                 field_extractor=field_extractor, rule_evaluator=rule_eval,
-                confidence_scorer=conf_scorer,
-                remark_policy=remark,
+                confidence_scorer=conf_scorer, remark_policy=remark,
             )
 
             await declare_topology(self._rmq)
+
+            # Start outbox publisher
+            self._outbox = OutboxPublisher(self._rmq, async_session_factory)
+            await self._outbox.start()
+
             processor = JobProcessor(orchestrator)
             self._consumer = InvoiceRequestConsumer(self._rmq)
             await self._consumer.start(processor.handle)
@@ -115,6 +120,8 @@ class WorkerMain:
         logger.info("worker_shutting_down")
         if self._consumer:
             await self._consumer.stop()
+        if self._outbox:
+            await self._outbox.stop()
         if self._file_client:
             await self._file_client.close()
         await self._rmq.close()

@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     YOLO_CONFIDENCE_THRESHOLD: float = 0.40
     YOLO_NMS_THRESHOLD: float = 0.45
 
-    OCR_ENGINE: str = "paddleocr_vl"
+    OCR_ENGINE: str = "document_ocr"
     OCR_USE_GPU: bool = True
     OCR_FALLBACK_ENABLED: bool = True
 
@@ -73,7 +73,54 @@ class Settings(BaseSettings):
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"
     INTERNAL_API_KEY: str = ""
 
-    TOYOTA_CALLBACK_URL: str = ""
+    # --- concurrency ---
+    MAX_PARALLEL_DOCUMENTS: int = 3
+    MAX_PARALLEL_DOWNLOADS: int = 4
+    MAX_PARALLEL_PDF_RENDER: int = 4
+    MAX_PARALLEL_PAGES: int = 16
+    OCR_CONCURRENCY: int = 2
+    BARCODE_CONCURRENCY: int = 4
+    GPU_CONCURRENCY: int = 1
+    YOLO_GPU_CONCURRENCY: int = 1
+    OCR_GPU_CONCURRENCY: int = 1
+
+    # --- timeouts ---
+    DOCUMENT_PROCESSING_TIMEOUT_SECONDS: int = 300
+    PAGE_PROCESSING_TIMEOUT_SECONDS: int = 120
+    JOB_PROCESSING_TIMEOUT_SECONDS: int = 900
+
+    # --- database ---
+    DATABASE_POOL_SIZE: int = 5
+    DATABASE_MAX_OVERFLOW: int = 10
+    DATABASE_POOL_TIMEOUT_SECONDS: int = 30
+
+    # --- outbox ---
+    OUTBOX_POLL_INTERVAL_SECONDS: int = 5
+    OUTBOX_BATCH_SIZE: int = 10
+    OUTBOX_MAX_RETRY: int = 10
+    OUTBOX_LOCK_TIMEOUT_SECONDS: int = 60
+
+    # --- result ---
+    RESULT_DELIVERY_MODE: Literal["INLINE", "HYBRID", "REFERENCE"] = "INLINE"
+    MAX_RABBITMQ_RESULT_BYTES: int = 5_242_880
+    RESULT_OBJECT_STORAGE_ENABLED: bool = False
+    RESULT_OBJECT_STORAGE_BUCKET: str = ""
+    RESULT_OBJECT_STORAGE_PREFIX: str = "results/"
+    RESULT_SCHEMA_VERSION: str = "1.1"
+
+    # --- retention ---
+    FINAL_RESULT_RETENTION_DAYS: int = 365
+    OCR_RESULT_RETENTION_DAYS: int = 90
+    DETECTION_RESULT_RETENTION_DAYS: int = 90
+    ERROR_LOG_RETENTION_DAYS: int = 90
+    AUDIT_LOG_RETENTION_DAYS: int = 365
+    OUTBOX_PUBLISHED_RETENTION_DAYS: int = 30
+    ARTIFACT_RETENTION_DAYS: int = 30
+    DEBUG_ARTIFACT_RETENTION_DAYS: int = 7
+
+    # --- debug ---
+    KEEP_DEBUG_ARTIFACTS: bool = False
+    TEMP_ROOT_DIR: str = "/tmp/vision-ai"
 
 
 settings = Settings()
