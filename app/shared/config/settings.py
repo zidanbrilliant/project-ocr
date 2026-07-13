@@ -71,13 +71,7 @@ class Settings(BaseSettings):
     # --- concurrency ---
     MAX_PARALLEL_DOCUMENTS: int = 3
     MAX_PARALLEL_DOWNLOADS: int = 4
-    MAX_PARALLEL_PDF_RENDER: int = 4
     MAX_PARALLEL_PAGES: int = 16
-    OCR_CONCURRENCY: int = 2
-    BARCODE_CONCURRENCY: int = 4
-    GPU_CONCURRENCY: int = 1
-    YOLO_GPU_CONCURRENCY: int = 1
-    OCR_GPU_CONCURRENCY: int = 1
 
     # --- timeouts ---
     DOCUMENT_PROCESSING_TIMEOUT_SECONDS: int = 300
@@ -96,11 +90,6 @@ class Settings(BaseSettings):
     OUTBOX_LOCK_TIMEOUT_SECONDS: int = 60
 
     # --- result ---
-    RESULT_DELIVERY_MODE: Literal["INLINE", "HYBRID", "REFERENCE"] = "INLINE"
-    MAX_RABBITMQ_RESULT_BYTES: int = 5_242_880
-    RESULT_OBJECT_STORAGE_ENABLED: bool = False
-    RESULT_OBJECT_STORAGE_BUCKET: str = ""
-    RESULT_OBJECT_STORAGE_PREFIX: str = "results/"
     RESULT_SCHEMA_VERSION: str = "1.1"
 
     # --- retention ---

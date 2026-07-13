@@ -36,9 +36,6 @@ class ReprocessResponse(BaseModel):
     message: str = "Job reprocess has been queued."
 
 
-class ModelVersionResponse(BaseModel):
-    ocr: dict[str, Any] = Field(default_factory=lambda: {"engine": "PaddleOCR", "version": "2.8", "use_gpu": True})
-    detector: dict[str, Any] = Field(default_factory=lambda: {"framework": "Ultralytics", "model_name": "toyota-document-yolo", "model_version": "2026.07.01"})
-    barcode: dict[str, Any] = Field(default_factory=lambda: {"engine": "zxing-cpp", "version": "2.x"})
+
 
 
