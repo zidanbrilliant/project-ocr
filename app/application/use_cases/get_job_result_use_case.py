@@ -12,12 +12,16 @@ class GetJobResultUseCase:
             return None
         internal = final.internal_result_json or {}
         documents = internal.get("documents", [])
+        # ponytail: support both legacy (pages[]) and new (documents[].pages[]) format
+        pages = internal.get("pages", [])
+        if not pages and documents:
+            pages = documents[0].get("pages", []) if documents else []
         result_data = None
         if documents:
             doc = documents[0]
             result_data = {
-                "invoice_number_result": doc.get("ocr", {}).get("document_number"),
-                "amount_result": doc.get("ocr", {}).get("transaction_amount"),
+                "documents": documents,
+                "summary": internal.get("summary", {}),
             }
         return JobResultResponse(
             queue_id=final.queue_id,
@@ -26,5 +30,5 @@ class GetJobResultUseCase:
             ai_return_confidence=final.ai_return_confidence,
             ai_return_remark=final.ai_return_remark,
             result=result_data,
-            pages=internal.get("pages", []),
+            pages=pages,
         )
