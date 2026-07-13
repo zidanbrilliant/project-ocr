@@ -26,4 +26,5 @@ class GetJobResultUseCase:
             ai_return_confidence=final.ai_return_confidence,
             ai_return_remark=final.ai_return_remark,
             result=result_data,
+            pages=internal.get("pages", []),
         )

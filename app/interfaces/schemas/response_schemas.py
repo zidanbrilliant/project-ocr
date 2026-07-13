@@ -39,6 +39,7 @@ class JobResultResponse(BaseModel):
     ai_return_confidence: int | None
     ai_return_remark: str
     result: dict[str, Any] | None = None
+    pages: list[dict[str, Any]] = Field(default_factory=list, description="Per-page OCR, detections, barcode")
 
 
 class ReprocessResponse(BaseModel):

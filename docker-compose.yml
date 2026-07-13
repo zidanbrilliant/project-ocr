@@ -87,5 +87,13 @@ services:
     depends_on:
       - prometheus
 
+  adminer:
+    image: adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:

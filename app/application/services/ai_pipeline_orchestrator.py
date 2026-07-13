@@ -225,10 +225,27 @@ class AIPipelineOrchestrator:
             overall = statuses.OK if passed else statuses.NG
             remark = self._remark_policy.generate(validation)
 
+            # ponytail: build pages[] from per-page results
+            pages = []
+            for i in range(len(page_images)):
+                page_dets = [d for d in raw_detections if d.get("page_number", 1) == i + 1]
+                pages.append({
+                    "page_number": i + 1,
+                    "page_index": i,
+                    "ocr": {
+                        "engine": ocr_results[i].get("engine_name", "?"),
+                        "raw_text": ocr_results[i].get("raw_text"),
+                        "average_confidence": ocr_results[i].get("average_confidence"),
+                    },
+                    "detections": page_dets,
+                    "barcode": barcode_results[i] if i < len(barcode_results) else {},
+                })
+
             finish_dt = datetime.utcnow()
             duration_ms = int((finish_dt - start_dt).total_seconds() * 1000)
 
             final_result = FinalResult(
+                internal_result_json={"pages": pages},
                 job_id=job_id,
                 queue_id=queue_id,
                 overall_result=overall,
