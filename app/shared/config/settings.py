@@ -63,12 +63,7 @@ class Settings(BaseSettings):
     RETRY_BACKOFF_MULTIPLIER: int = 2
 
     WORKER_PREFETCH_COUNT: int = 1
-    WORKER_CONCURRENCY: int = 1
     GPU_DEVICE_ID: int = 0
-
-    ENABLE_METRICS: bool = True
-    ENABLE_SENTRY: bool = False
-    SENTRY_DSN: str = ""
 
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"
     INTERNAL_API_KEY: str = ""

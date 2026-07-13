@@ -9,18 +9,6 @@ class HealthResponse(BaseModel):
     timestamp: str = Field(default="")
 
 
-class ReadinessCheck(BaseModel):
-    database: str = Field(default="unknown")
-    rabbitmq: str = Field(default="unknown")
-    ocr_model: str = Field(default="unknown")
-    yolo_model: str = Field(default="unknown")
-
-
-class ReadinessResponse(BaseModel):
-    status: str = Field(default="ready")
-    checks: ReadinessCheck = Field(default_factory=ReadinessCheck)
-
-
 class JobStatusResponse(BaseModel):
     queue_id: str
     job_id: str

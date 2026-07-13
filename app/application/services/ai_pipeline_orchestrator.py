@@ -8,7 +8,6 @@ from aio_pika.abc import AbstractIncomingMessage
 
 from app.application.dto.request_normalizer import normalize_request
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
-from app.application.services.document_error_builder import build_document_error_result
 from app.application.services.field_extraction_service import FieldExtractionService
 from app.domain.entities.business_validation_result import BusinessValidationResult, FailedRule
 from app.domain.entities.final_result import FinalResult
