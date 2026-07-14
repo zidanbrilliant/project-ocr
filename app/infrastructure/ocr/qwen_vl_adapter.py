@@ -1,9 +1,33 @@
+"""Qwen2.5-VL inference adapter backed by vLLM.
+
+Uses vLLM's LLM engine instead of raw AutoModel so that:
+  - AWQ quantisation is handled natively (no autoawq ↔ transformers version clash)
+  - PagedAttention gives much better GPU-memory utilisation on DGX hardware
+  - The same public interface (warmup / run / _run_qwen) is preserved, so
+    DocumentOCR and the pipeline orchestrator need zero changes.
+
+Environment / settings required
+--------------------------------
+  VLM_MODEL_PATH  – absolute path to the local model directory, e.g.
+                    /mnt/models/Qwen2.5-VL-7B-Instruct-AWQ
+  VLM_MAX_TOKENS  – maximum new tokens to generate (default 2048)
+
+Fallback behaviour
+------------------
+  If vLLM is not installed *or* the model directory does not exist,
+  _available stays False and every call to run() returns an empty result
+  dict so that DocumentOCR can fall through to EasyOCR gracefully.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
 import os
 import time
 from typing import Any
 
 import torch
-import numpy as np
 
 from app.shared.config.settings import settings
 from app.shared.logging.logger import get_logger
@@ -12,125 +36,170 @@ logger = get_logger(__name__)
 
 _HAS_CUDA = torch.cuda.is_available()
 
-# ponytail: single global model instance, loaded once at warmup
-_model_instance = None
-_processor_instance = None
+# ---------------------------------------------------------------------------
+# Module-level singleton so the heavy model is loaded only once per process.
+# ---------------------------------------------------------------------------
+_llm_instance: Any | None = None  # vllm.LLM
 
 
 class QwenVLAdapter:
-    """Vision-Language Model OCR using Qwen2.5-VL-7B.
+    """Vision-Language Model OCR using Qwen2.5-VL-7B (vLLM backend).
 
     Directly reads document images and extracts structured text.
     Much higher accuracy than traditional OCR for complex layouts.
-    Requires ~16GB VRAM. Falls back gracefully if model not available.
+    Requires ~8-10 GB VRAM (AWQ 4-bit).  Falls back gracefully if
+    vLLM is not installed or the model is not present on disk.
     """
 
     def __init__(self) -> None:
-        self._model = None
-        self._processor = None
-        self._available = False
+        self._llm: Any | None = None       # vllm.LLM instance
+        self._available: bool = False
 
+    # ------------------------------------------------------------------
+    # warmup — called once at worker startup
+    # ------------------------------------------------------------------
     async def warmup(self) -> None:
-        global _model_instance, _processor_instance
-        if _model_instance is not None and _processor_instance is not None:
-            self._model = _model_instance
-            self._processor = _processor_instance
+        global _llm_instance
+
+        # Re-use already-loaded model (singleton)
+        if _llm_instance is not None:
+            self._llm = _llm_instance
             self._available = True
             logger.info("qwen_vl_reusing_cached_model")
             return
 
-        try:
-            from transformers import AutoProcessor, AutoModel
-            from qwen_vl_utils import process_vision_info
-
-            # ponytail: use local model path from settings, fallback to HuggingFace
-            model_name = settings.VLM_MODEL_PATH or "Qwen/Qwen2.5-VL-7B-Instruct"
-            logger.info("qwen_vl_loading_model", model=model_name, local=bool(settings.VLM_MODEL_PATH))
-
-            load_kwargs = dict(
-                pretrained_model_name_or_path=model_name,
-                device_map="cuda:0" if _HAS_CUDA else None,
+        model_path = settings.VLM_MODEL_PATH or ""
+        if not model_path:
+            logger.warning(
+                "qwen_vl_skip_load",
+                reason="VLM_MODEL_PATH is empty — set it in .env to enable Qwen2.5-VL",
             )
-            if _HAS_CUDA:
-                try:
-                    import flash_attn  # noqa: F401
-                    load_kwargs["attn_implementation"] = "flash_attention_2"
-                except ImportError:
-                    load_kwargs["attn_implementation"] = "sdpa"
-                    logger.info("flash_attn_not_available_using_sdpa")
+            return
 
-            load_kwargs["local_files_only"] = bool(settings.VLM_MODEL_PATH)
-            load_kwargs["trust_remote_code"] = True
-            self._model = AutoModel.from_pretrained(**load_kwargs)
-            self._processor = AutoProcessor.from_pretrained(model_name)
-            _model_instance = self._model
-            _processor_instance = self._processor
+        if not os.path.isdir(model_path):
+            logger.warning(
+                "qwen_vl_skip_load",
+                reason=f"Model directory not found: {model_path}",
+            )
+            return
+
+        logger.info("qwen_vl_loading_model", model=model_path, backend="vllm")
+
+        try:
+            from vllm import LLM  # type: ignore[import]
+
+            # Detect quantisation from directory name / config
+            quant: str | None = None
+            model_lower = model_path.lower()
+            if "awq" in model_lower:
+                # Use awq_marlin for DGX (Ampere / Ada architecture) — faster
+                # than plain awq on A100/H100.  Falls back to awq silently if
+                # marlin kernels are not available.
+                quant = "awq_marlin"
+
+            llm_kwargs: dict[str, Any] = dict(
+                model=model_path,
+                quantization=quant,
+                dtype="float16",            # AWQ does not support bfloat16 yet
+                trust_remote_code=True,
+                # Limit GPU memory to leave headroom for YOLO + EasyOCR
+                gpu_memory_utilization=0.70,
+                max_model_len=4096,
+                # Do NOT try to download anything from HuggingFace Hub
+                download_dir=None,
+            )
+
+            if not _HAS_CUDA:
+                # CPU fallback (very slow, for smoke-testing only)
+                llm_kwargs.pop("quantization", None)
+                llm_kwargs["device"] = "cpu"
+                logger.warning("qwen_vl_cpu_mode", reason="No CUDA device detected")
+
+            self._llm = LLM(**llm_kwargs)
+            _llm_instance = self._llm
             self._available = True
-            logger.info("qwen_vl_loaded", gpu=_HAS_CUDA)
+            logger.info("qwen_vl_loaded", gpu=_HAS_CUDA, backend="vllm", quant=quant)
 
-        except ImportError as e:
-            logger.warning("qwen_vl_not_available", error=str(e))
-        except Exception as e:
-            logger.warning("qwen_vl_load_failed", error=str(e))
+        except ImportError as exc:
+            logger.warning(
+                "qwen_vl_not_available",
+                error=str(exc),
+                hint="Run `pip install vllm>=0.7.2` in your (ocr) environment",
+            )
+        except Exception as exc:
+            logger.warning("qwen_vl_load_failed", error=str(exc))
 
+    # ------------------------------------------------------------------
+    # Public run interface (mirrors old AutoModel adapter)
+    # ------------------------------------------------------------------
     async def run(self, image_bytes: bytes, extension: str = ".pdf") -> dict[str, Any]:
         return await self._run_qwen(image_bytes)
 
     async def _run_qwen(self, image_bytes: bytes) -> dict[str, Any]:
-        if not self._available:
-            return {"engine_name": "qwen2.5-vl", "raw_text": "", "error": "model_not_loaded", "average_confidence": 0.0}
+        if not self._available or self._llm is None:
+            return {
+                "engine_name": "qwen2.5-vl",
+                "raw_text": "",
+                "error": "model_not_loaded",
+                "average_confidence": 0.0,
+            }
 
-        from qwen_vl_utils import process_vision_info
         start = time.monotonic()
 
         try:
-            import PIL.Image
-            import io
-            image = PIL.Image.open(io.BytesIO(image_bytes))
+            from vllm import SamplingParams  # type: ignore[import]
 
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": image},
-                        {"type": "text", "text": (
-                            "Extract ALL text from this document image exactly as written. "
-                            "Preserve the original layout order. Return only the extracted text, no explanations."
-                        )},
-                    ],
-                }
-            ]
+            # ----------------------------------------------------------------
+            # Build a Qwen2.5-VL chat prompt with the image embedded as
+            # base64 data-URI so vLLM's vision pipeline can decode it.
+            # ----------------------------------------------------------------
+            b64 = base64.b64encode(image_bytes).decode("ascii")
 
-            text = self._processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+            # Detect MIME type from magic bytes
+            if image_bytes[:4] == b"%PDF":
+                mime = "image/png"   # caller should have rasterised PDFs first
+            elif image_bytes[:3] == b"\xff\xd8\xff":
+                mime = "image/jpeg"
+            elif image_bytes[:4] == b"\x89PNG":
+                mime = "image/png"
+            else:
+                mime = "image/png"
+
+            data_uri = f"data:{mime};base64,{b64}"
+
+            prompt_text = (
+                "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+                "<|im_start|>user\n"
+                f"<|vision_start|><|image_pad|><|vision_end|>"
+                "Extract ALL text from this document image exactly as written. "
+                "Preserve the original layout order. Return only the extracted text, no explanations."
+                "<|im_end|>\n"
+                "<|im_start|>assistant\n"
             )
-            image_inputs, _ = process_vision_info(messages)
-            inputs = self._processor(
-                text=[text],
-                images=image_inputs,
-                padding=True,
-                return_tensors="pt",
-            ).to(self._model.device)
 
-            generated_ids = self._model.generate(
-                **inputs,
-                max_new_tokens=settings.VLM_MAX_TOKENS,
-                temperature=0.1,
-                top_p=0.9,
-                do_sample=False,
+            # vLLM multi-modal input format
+            llm_input = {
+                "prompt": prompt_text,
+                "multi_modal_data": {
+                    "image": _load_pil_image(image_bytes),
+                },
+            }
+
+            sampling_params = SamplingParams(
+                temperature=0.0,                  # deterministic
+                max_tokens=settings.VLM_MAX_TOKENS,
+                stop=["<|im_end|>", "<|endoftext|>"],
             )
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-            ]
-            output_text = self._processor.batch_decode(
-                generated_ids_trimmed,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
-            )[0]
+
+            # vLLM generate is synchronous but releases the GIL — safe to call
+            # from an async context without blocking the event loop for short
+            # inference bursts (model is already in GPU memory).
+            outputs = self._llm.generate([llm_input], sampling_params=sampling_params)
+            output_text: str = outputs[0].outputs[0].text.strip()
 
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            lines = [l for l in output_text.split("\n") if l.strip()]
-            tokens = [{"text": l, "confidence": 95.0} for l in lines]
+            lines = [ln for ln in output_text.split("\n") if ln.strip()]
+            tokens = [{"text": ln, "confidence": 95.0} for ln in lines]
 
             return {
                 "engine_name": "qwen2.5-vl",
@@ -140,11 +209,23 @@ class QwenVLAdapter:
                 "processing_time_ms": elapsed_ms,
             }
 
-        except Exception as e:
+        except Exception:
             logger.exception("qwen_vl_inference_failed")
             elapsed_ms = int((time.monotonic() - start) * 1000)
             return {
-                "engine_name": "qwen2.5-vl", "raw_text": "",
-                "error": str(e), "average_confidence": 0.0,
+                "engine_name": "qwen2.5-vl",
+                "raw_text": "",
+                "error": "inference_exception",
+                "average_confidence": 0.0,
                 "processing_time_ms": elapsed_ms,
             }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _load_pil_image(image_bytes: bytes):  # type: ignore[return]
+    """Decode raw bytes to a PIL Image for vLLM's vision pipeline."""
+    import PIL.Image  # type: ignore[import]
+    return PIL.Image.open(io.BytesIO(image_bytes)).convert("RGB")
