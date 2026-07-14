@@ -43,55 +43,86 @@ _HAS_CUDA = torch.cuda.is_available()
 # ---------------------------------------------------------------------------
 
 def _suppress_bad_torch_addons() -> None:  # noqa: C901
-    """Prevent two known environment issues on DGX / shared conda envs from
-    crashing the vLLM import chain before we even reach model loading.
+    """Prevent broken optional torch add-ons from crashing the vLLM import chain.
+
+    WHY THIS IS NEEDED
+    ------------------
+    vLLM >= 0.6 imports ``torchcodec`` and accesses ``torchaudio`` at module
+    level for video multimodal support.  In a shared DGX conda environment two
+    problems arise before we even reach model loading:
 
     Problem 1 — torchcodec + missing FFmpeg
-    ----------------------------------------
-    vLLM >= 0.6 imports ``torchcodec`` at *module level* (in
-    vllm/multimodal/video.py) to support video multimodal input.
-    torchcodec immediately tries to dlopen FFmpeg shared libraries
-    (libavutil.so.56/57/58/59/60).  If FFmpeg is not installed those
-    dlopen calls raise OSError which bubbles up and prevents *all* of
-    vLLM from loading — even though we only ever feed it images.
-
-    Fix: insert a no-op stub into sys.modules *before* vLLM is imported
-    so the ``import torchcodec`` inside vLLM resolves to our stub.
+        torchcodec.dlopen(libavutil.so.*) raises OSError when FFmpeg is absent.
 
     Problem 2 — torchaudio CUDA version mismatch
-    ---------------------------------------------
-    When torchaudio is compiled against a different CUDA version than
-    PyTorch (e.g. cu12.8 vs cu13.0), importing torchaudio raises a
-    RuntimeError.  vLLM may trigger this via transitive imports.
+        torchaudio compiled against cu12.8 raises RuntimeError when PyTorch is
+        cu13.0.  vLLM calls ``importlib.util.find_spec("torchaudio")`` which,
+        if ``torchaudio`` is already in sys.modules with ``__spec__ = None``,
+        raises ``ValueError: torchaudio.__spec__ is None``.
 
-    Fix: pre-import torchaudio ourselves; if it fails, stub it out the
-    same way.
+    THE BUG WE WERE HITTING
+    ------------------------
+    ``types.ModuleType(name)`` creates a module whose ``__spec__`` is ``None``.
+    ``importlib.util.find_spec(name)`` explicitly raises ValueError when it
+    finds a module in sys.modules whose __spec__ is None (Python 3.4+ contract).
+    So inserting a bare ModuleType stub actually makes things *worse*.
+
+    THE FIX
+    -------
+    Use ``importlib.machinery.ModuleSpec(name, loader=None)`` to give every
+    stub a valid (non-None) spec.  find_spec() then returns the spec cleanly
+    instead of raising, and vLLM sees the package as "present but empty" —
+    which is fine because we never use video/audio inference.
     """
-    # --- torchcodec stub ---
+    import importlib.machinery
+
+    def _make_stub(name: str) -> _types.ModuleType:
+        """Return a ModuleType with a valid __spec__ (loader=None is legal)."""
+        m = _types.ModuleType(name)
+        m.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
+        return m
+
+    # ------------------------------------------------------------------ #
+    # 1. torchcodec — dlopen FFmpeg fails when FFmpeg is not installed
+    # ------------------------------------------------------------------ #
     if "torchcodec" not in sys.modules:
         try:
             import torchcodec  # type: ignore[import]  # noqa: F401
         except Exception:
-            # Build a minimal stub that satisfies vLLM's attribute accesses
-            _root = _types.ModuleType("torchcodec")
+            _root = _make_stub("torchcodec")
             for _sub in ("decoders", "decoders._core", "_internally_replaced_utils"):
-                _m = _types.ModuleType(f"torchcodec.{_sub}")
-                sys.modules[f"torchcodec.{_sub}"] = _m
+                _full = f"torchcodec.{_sub}"
+                _m = _make_stub(_full)
+                sys.modules[_full] = _m
+                # expose as attribute so ``torchcodec.decoders`` attribute
+                # access works even if vLLM doesn't go through sys.modules
                 setattr(_root, _sub.split(".")[0], _m)
             sys.modules["torchcodec"] = _root
-            logger.debug("torchcodec_stubbed", reason="FFmpeg shared libs not found; image-only mode")
+            logger.debug("torchcodec_stubbed",
+                         reason="FFmpeg shared libs not found; image-only mode")
 
-    # --- torchaudio CUDA mismatch ---
+    # ------------------------------------------------------------------ #
+    # 2. torchaudio — CUDA version mismatch (cu12.8 vs cu13.0)
+    # ------------------------------------------------------------------ #
+    # Edge case: a previous import attempt may have left torchaudio in
+    # sys.modules with __spec__ = None (our old stub code).  Fix it first.
+    _ta_existing = sys.modules.get("torchaudio")
+    if _ta_existing is not None and getattr(_ta_existing, "__spec__", None) is None:
+        _ta_existing.__spec__ = importlib.machinery.ModuleSpec("torchaudio", loader=None)
+        logger.debug("torchaudio_spec_fixed",
+                     reason="Patched pre-existing stub that had __spec__=None")
+
     if "torchaudio" not in sys.modules:
         try:
             import torchaudio  # type: ignore[import]  # noqa: F401
         except Exception:
-            _ta = _types.ModuleType("torchaudio")
-            sys.modules["torchaudio"] = _ta
-            logger.debug("torchaudio_stubbed", reason="CUDA version mismatch; not needed for OCR")
+            sys.modules["torchaudio"] = _make_stub("torchaudio")
+            logger.debug("torchaudio_stubbed",
+                         reason="CUDA version mismatch; not needed for OCR")
 
 
 _suppress_bad_torch_addons()
+
 
 # ---------------------------------------------------------------------------
 # Module-level singleton so the heavy model is loaded only once per process.
