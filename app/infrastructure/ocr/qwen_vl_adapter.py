@@ -24,7 +24,9 @@ from __future__ import annotations
 import base64
 import io
 import os
+import sys
 import time
+import types as _types
 from typing import Any
 
 import torch
@@ -35,6 +37,61 @@ from app.shared.logging.logger import get_logger
 logger = get_logger(__name__)
 
 _HAS_CUDA = torch.cuda.is_available()
+
+# ---------------------------------------------------------------------------
+# Defensive guards — must run BEFORE any vLLM import
+# ---------------------------------------------------------------------------
+
+def _suppress_bad_torch_addons() -> None:  # noqa: C901
+    """Prevent two known environment issues on DGX / shared conda envs from
+    crashing the vLLM import chain before we even reach model loading.
+
+    Problem 1 — torchcodec + missing FFmpeg
+    ----------------------------------------
+    vLLM >= 0.6 imports ``torchcodec`` at *module level* (in
+    vllm/multimodal/video.py) to support video multimodal input.
+    torchcodec immediately tries to dlopen FFmpeg shared libraries
+    (libavutil.so.56/57/58/59/60).  If FFmpeg is not installed those
+    dlopen calls raise OSError which bubbles up and prevents *all* of
+    vLLM from loading — even though we only ever feed it images.
+
+    Fix: insert a no-op stub into sys.modules *before* vLLM is imported
+    so the ``import torchcodec`` inside vLLM resolves to our stub.
+
+    Problem 2 — torchaudio CUDA version mismatch
+    ---------------------------------------------
+    When torchaudio is compiled against a different CUDA version than
+    PyTorch (e.g. cu12.8 vs cu13.0), importing torchaudio raises a
+    RuntimeError.  vLLM may trigger this via transitive imports.
+
+    Fix: pre-import torchaudio ourselves; if it fails, stub it out the
+    same way.
+    """
+    # --- torchcodec stub ---
+    if "torchcodec" not in sys.modules:
+        try:
+            import torchcodec  # type: ignore[import]  # noqa: F401
+        except Exception:
+            # Build a minimal stub that satisfies vLLM's attribute accesses
+            _root = _types.ModuleType("torchcodec")
+            for _sub in ("decoders", "decoders._core", "_internally_replaced_utils"):
+                _m = _types.ModuleType(f"torchcodec.{_sub}")
+                sys.modules[f"torchcodec.{_sub}"] = _m
+                setattr(_root, _sub.split(".")[0], _m)
+            sys.modules["torchcodec"] = _root
+            logger.debug("torchcodec_stubbed", reason="FFmpeg shared libs not found; image-only mode")
+
+    # --- torchaudio CUDA mismatch ---
+    if "torchaudio" not in sys.modules:
+        try:
+            import torchaudio  # type: ignore[import]  # noqa: F401
+        except Exception:
+            _ta = _types.ModuleType("torchaudio")
+            sys.modules["torchaudio"] = _ta
+            logger.debug("torchaudio_stubbed", reason="CUDA version mismatch; not needed for OCR")
+
+
+_suppress_bad_torch_addons()
 
 # ---------------------------------------------------------------------------
 # Module-level singleton so the heavy model is loaded only once per process.
