@@ -185,6 +185,7 @@ class QwenVLAdapter:
     def __init__(self) -> None:
         self._llm: Any | None = None       # vllm.LLM instance
         self._available: bool = False
+        self._load_error: str | None = None
 
     # ------------------------------------------------------------------
     # warmup — called once at worker startup
@@ -196,21 +197,24 @@ class QwenVLAdapter:
         if _llm_instance is not None:
             self._llm = _llm_instance
             self._available = True
+            self._load_error = None
             logger.info("qwen_vl_reusing_cached_model")
             return
 
         model_path = settings.VLM_MODEL_PATH or ""
         if not model_path:
+            self._load_error = "VLM_MODEL_PATH is empty — set it in .env to enable Qwen2.5-VL"
             logger.warning(
                 "qwen_vl_skip_load",
-                reason="VLM_MODEL_PATH is empty — set it in .env to enable Qwen2.5-VL",
+                reason=self._load_error,
             )
             return
 
         if not os.path.isdir(model_path):
+            self._load_error = f"Model directory not found: {model_path}"
             logger.warning(
                 "qwen_vl_skip_load",
-                reason=f"Model directory not found: {model_path}",
+                reason=self._load_error,
             )
             return
 
@@ -249,15 +253,18 @@ class QwenVLAdapter:
             self._llm = LLM(**llm_kwargs)
             _llm_instance = self._llm
             self._available = True
+            self._load_error = None
             logger.info("qwen_vl_loaded", gpu=_HAS_CUDA, backend="vllm", quant=quant)
 
         except ImportError as exc:
+            self._load_error = f"ImportError: {str(exc)}"
             logger.warning(
                 "qwen_vl_not_available",
                 error=str(exc),
                 hint="Run `pip install vllm>=0.7.2` in your (ocr) environment",
             )
         except Exception as exc:
+            self._load_error = f"Exception: {str(exc)}"
             logger.warning("qwen_vl_load_failed", error=str(exc))
 
     # ------------------------------------------------------------------

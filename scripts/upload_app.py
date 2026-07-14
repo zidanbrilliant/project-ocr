@@ -66,7 +66,33 @@ async def main_ui():
     st.title("🔍 Vision AI — Document Inspector")
 
     with st.sidebar:
-        if st.button("Clear Results"):
+        st.subheader("Model Status")
+        p = get_processor()
+        
+        # Check Qwen2.5-VL status
+        qwen_avail = getattr(p._ocr._qwen, "_available", False)
+        if qwen_avail:
+            st.success("🤖 Qwen2.5-VL: Ready")
+        else:
+            qwen_err = getattr(p._ocr._qwen, "_load_error", "Not warmed up yet")
+            st.error(f"🤖 Qwen2.5-VL: Not Available\n\n*Error: {qwen_err}*")
+
+        # Check YOLO status
+        yolo_avail = getattr(p._yolo, "_model", None) is not None
+        if yolo_avail:
+            st.success("🎯 YOLO: Ready")
+        else:
+            st.error("🎯 YOLO: Not Loaded")
+
+        # Check EasyOCR fallback status
+        easy_avail = getattr(p._ocr, "_easyocr_reader", None) is not None
+        if easy_avail:
+            st.success("📝 EasyOCR Fallback: Ready")
+        else:
+            st.warning("📝 EasyOCR Fallback: Not Available")
+
+        st.markdown("---")
+        if st.button("Clear Results", use_container_width=True):
             clear_processing_state()
 
     col_left, col_right = st.columns([1, 2])
@@ -191,6 +217,10 @@ def _render_ocr(page: dict, idx: int):
     raw_text = ocr.get("raw_text", "")
     if not raw_text or raw_text == "(empty)":
         raw_text = ""
+
+    if ocr.get("status") == "FAILED":
+        err_msg = ocr.get("error") or "Check 'Model Status' in sidebar to see if Qwen is loaded."
+        st.error(f"OCR Failed: {err_msg}")
 
     st.text_area("Raw Text", raw_text or "(empty)", height=300)
     cols = st.columns(3)

@@ -71,6 +71,7 @@ class DirectProcessor:
             except Exception as e:
                 logger.warning(f"{name}_warmup_failed", error=str(e))
         self._models_loaded = True
+        self._warmed_up = True
         logger.info("processor_warmup_done")
 
     async def process(self, file_bytes: bytes, filename: str, doc_type: str = "INV") -> dict[str, Any]:
