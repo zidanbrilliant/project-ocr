@@ -24,7 +24,6 @@ from app.infrastructure.detection.yolo_adapter import YOLOAdapter
 from app.infrastructure.document_converter.document_validator import DocumentValidator
 from app.infrastructure.document_converter.image_preprocessor import ImagePreprocessor
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
-from app.infrastructure.ocr.ocr_fallback_chain import OCRFallbackChain
 from app.infrastructure.ocr.document_ocr import DocumentOCR
 from app.infrastructure.storage.temp_file_manager import TempFileManager
 from app.shared.config.settings import settings
@@ -55,7 +54,6 @@ class DirectProcessor:
         self._temp_mgr = TempFileManager()
 
         self._ocr = DocumentOCR()
-        self._ocr_chain = OCRFallbackChain(self._ocr)
 
         self._yolo = YOLOAdapter()
 
@@ -104,7 +102,7 @@ class DirectProcessor:
             ocr_ext = ext
             ocr_raw: dict[str, Any] = {}
             if ext == ".pdf":
-                pdf_text = await self._ocr_chain.run(file_bytes, None, extension=".pdf")
+                pdf_text = await self._ocr.run(file_bytes, extension=".pdf")
                 if pdf_text.get("raw_text", "").strip():
                     ocr_raw = pdf_text
                     page_images = self._pdf_renderer.render(file_bytes)
@@ -141,7 +139,7 @@ class DirectProcessor:
             for i in range(n_pages):
                 p_img = page_images[i] if i < len(page_images) else b""
                 pp_img = preprocessed[i] if i < len(preprocessed) else None
-                ocr_task = self._ocr_chain.run(p_img, pp_img, extension=ocr_ext)
+                ocr_task = self._ocr.run(pp_img or p_img, extension=ocr_ext)
                 bc_task = self._barcode_chain.read(pp_img or p_img)
                 page_ocr, page_bc = await asyncio.gather(ocr_task, bc_task)
 

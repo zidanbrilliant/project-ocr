@@ -20,7 +20,6 @@ from app.infrastructure.document_converter.image_preprocessor import ImagePrepro
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
 from app.infrastructure.document_converter.word_converter import WordConverter
 from app.infrastructure.ocr.document_ocr import DocumentOCR
-from app.infrastructure.ocr.ocr_fallback_chain import OCRFallbackChain
 from app.infrastructure.rabbitmq.connection import RabbitMQConnection
 from app.infrastructure.rabbitmq.consumer import InvoiceRequestConsumer
 from app.infrastructure.rabbitmq.outbox_publisher import OutboxPublisher
@@ -65,12 +64,11 @@ class WorkerMain:
         conf_scorer = ConfidenceScoringService()
         remark = RemarkPolicy()
 
-        ocr_primary = DocumentOCR()
+        ocr_engine = DocumentOCR()
         try:
-            await ocr_primary.warmup()
+            await ocr_engine.warmup()
         except Exception as e:
             logger.warning("ocr_warmup_failed", error=str(e))
-        ocr_chain = OCRFallbackChain(ocr_primary)
 
         yolo = YOLOAdapter()
         try:
@@ -92,7 +90,7 @@ class WorkerMain:
                 publisher=publisher, retry_handler=retry,
                 file_client=self._file_client, temp_mgr=temp_mgr,
                 pdf_renderer=pdf_renderer, word_converter=word_converter,
-                preprocessor=preprocessor, ocr_chain=ocr_chain,
+                preprocessor=preprocessor, ocr_engine=ocr_engine,
                 yolo=yolo, barcode_chain=barcode_chain, validator=validator,
                 field_extractor=field_extractor, rule_evaluator=rule_eval,
                 confidence_scorer=conf_scorer, remark_policy=remark,

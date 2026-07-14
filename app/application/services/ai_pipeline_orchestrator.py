@@ -29,7 +29,7 @@ from app.infrastructure.document_converter.document_validator import DocumentVal
 from app.infrastructure.document_converter.image_preprocessor import ImagePreprocessor
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
 from app.infrastructure.document_converter.word_converter import WordConverter
-from app.infrastructure.ocr.ocr_fallback_chain import OCRFallbackChain
+from app.infrastructure.ocr.document_ocr import DocumentOCR
 from app.infrastructure.rabbitmq.publisher import ResultPublisher
 from app.infrastructure.rabbitmq.retry import RetryHandler
 from app.infrastructure.storage.image_server_client import ImageServerClient
@@ -57,7 +57,7 @@ class AIPipelineOrchestrator:
         pdf_renderer: PDFRenderer,
         word_converter: WordConverter,
         preprocessor: ImagePreprocessor,
-        ocr_chain: OCRFallbackChain,
+        ocr_engine: DocumentOCR,
         yolo: YOLOAdapter,
         barcode_chain: BarcodeFallbackChain,
         validator: DocumentValidator,
@@ -76,7 +76,7 @@ class AIPipelineOrchestrator:
         self._pdf_renderer = pdf_renderer
         self._word_converter = word_converter
         self._preprocessor = preprocessor
-        self._ocr_chain = ocr_chain
+        self._ocr_engine = ocr_engine
         self._yolo = yolo
         self._barcode_chain = barcode_chain
         self._validator = validator
@@ -185,9 +185,12 @@ class AIPipelineOrchestrator:
         )
         await self._result_repo.save_final(final_result)
         await self._job_repo.update_result(job_id, overall, statuses.COMPLETED, finish_dt, duration_ms)
+        await self._result_repo.save_outbox_event(
+            job_id=job_id, event_type="FINAL_RESULT",
+            payload=result_payload,
+            message_id=f"out-{req.queue_id}",
+        )
 
-        # Publish via outbox pattern — for now direct publish, outbox publisher picks up from DB
-        await self._publisher.publish(result_payload)
         await self._audit.log(job_id, req.queue_id, "worker", "result_published", after={"overall": overall})
         await msg.ack()
         logger.info("job_completed", queue_id=req.queue_id, doc_count=len(doc_results), overall=overall, ms=duration_ms)
@@ -237,7 +240,7 @@ class AIPipelineOrchestrator:
 
             async def process_one_page(pp_img: bytes, idx: int) -> tuple[dict, dict]:
                 async with page_sem:
-                    ocr = await self._ocr_chain.run(pp_img, pp_img, extension=ext)
+                    ocr = await self._ocr_engine.run(pp_img, extension=ext)
                     bc = await self._barcode_chain.read(pp_img)
                     return ocr, bc
 

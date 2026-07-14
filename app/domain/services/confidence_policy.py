@@ -2,7 +2,6 @@ from typing import Any
 
 from app.domain.entities.detection_result import DetectionResult
 from app.domain.entities.ocr_result import OCRResult
-from app.domain.value_objects.confidence_score import ConfidenceScore
 
 
 class ConfidencePolicy:

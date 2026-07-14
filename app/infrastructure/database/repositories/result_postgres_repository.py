@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -6,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities.final_result import FinalResult
+from app.shared.config.settings import settings
 from app.infrastructure.database.models import (
     AIBarcodeResult,
     AIBusinessValidationResult,
@@ -16,6 +18,7 @@ from app.infrastructure.database.models import (
     AIErrorLog,
     AIFinalResult,
     AIOCRResult,
+    AIOutboxEvent,
 )
 
 
@@ -119,6 +122,17 @@ class ResultPostgresRepository:
             required_evidence=data.get("required_evidence"),
             reason=data.get("reason"),
             rule_config_snapshot=data.get("rule_config_snapshot", {}),
+        )
+        self._session.add(model)
+
+    async def save_outbox_event(self, job_id: uuid.UUID, event_type: str, payload: dict[str, Any], message_id: str | None = None) -> None:
+        model = AIOutboxEvent(
+            job_id=job_id, event_type=event_type,
+            destination_exchange=settings.RABBITMQ_RESULT_EXCHANGE,
+            routing_key=settings.RABBITMQ_RESULT_ROUTING_KEY,
+            payload=payload, payload_size_bytes=len(json.dumps(payload)),
+            status="PENDING", max_attempts=settings.OUTBOX_MAX_RETRY,
+            message_id=message_id,
         )
         self._session.add(model)
 
