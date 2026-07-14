@@ -32,6 +32,8 @@ class InvoiceRequestConsumer:
             async with message.process(ignore_processed=True):
                 try:
                     payload = json.loads(message.body.decode())
+                    # ponytail: preserve raw body for retry queue
+                    payload["_raw_body"] = message.body
                     logger.info("message_received", queue_id=payload.get("QUEUE_ID", "unknown"))
                     await handler(payload, message)
                 except json.JSONDecodeError:

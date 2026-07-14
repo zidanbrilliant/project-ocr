@@ -41,13 +41,13 @@ async def declare_topology(connection: RabbitMQConnection) -> None:
         type="direct",
         durable=True,
     )
+    # ponytail: TTL set per-message by RetryHandler, not at queue level
     retry_queue = await channel.declare_queue(
         settings.RABBITMQ_RETRY_QUEUE,
         durable=True,
         arguments={
             "x-dead-letter-exchange": settings.RABBITMQ_INPUT_EXCHANGE,
             "x-dead-letter-routing-key": settings.RABBITMQ_INPUT_ROUTING_KEY,
-            "x-message-ttl": 30000,
         },
     )
     await retry_queue.bind(retry_exchange, routing_key=settings.RABBITMQ_RETRY_ROUTING_KEY)

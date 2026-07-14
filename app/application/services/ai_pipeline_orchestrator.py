@@ -371,4 +371,5 @@ class AIPipelineOrchestrator:
             })
             await self._job_repo.update_result(job_id, statuses.NG, statuses.DLQ, datetime.utcnow(), 0)
             await self._audit.log(job_id, req.queue_id, "worker", "dlq_entered")
-            await msg.ack()
+            # ponytail: nack with requeue=false so RabbitMQ routes to DLX→DLQ
+            await msg.nack(requeue=False)
