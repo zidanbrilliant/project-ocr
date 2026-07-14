@@ -108,7 +108,11 @@ async def main_ui():
         if st.button("🚀 Process", type="primary", disabled=uploaded is None):
             with st.spinner("Processing..."):
                 p = get_processor()
-                if not getattr(p, "_warmed_up", False):
+                
+                # Check if Qwen or YOLO are not loaded. If so, force warmup.
+                qwen_avail = getattr(p._ocr._qwen, "_available", False)
+                yolo_avail = getattr(p._yolo, "_loaded", False)
+                if not qwen_avail or not yolo_avail:
                     await p.warmup()
 
                 uploaded_bytes = uploaded.getvalue()
@@ -140,6 +144,7 @@ async def main_ui():
                 st.session_state.processing_error = None
                 st.session_state.uploaded_file_hash = file_hash
                 st.session_state.selected_page_index = 0
+                st.rerun()
 
     # Display results
     ui_result = st.session_state.get("ui_result")
