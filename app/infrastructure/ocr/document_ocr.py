@@ -42,10 +42,14 @@ class DocumentOCR:
         except Exception as e:
             logger.warning("paddleocr_warmup_failed", error=str(e))
 
-        # Always load EasyOCR as fallback
-        import easyocr
-        self._easyocr_reader = easyocr.Reader(["en", "id"], gpu=_HAS_CUDA)
-        logger.info("easyocr_fallback_ready", gpu=_HAS_CUDA)
+        # Load EasyOCR as optional fallback (not installed? no problem)
+        try:
+            import easyocr
+            self._easyocr_reader = easyocr.Reader(["en", "id"], gpu=_HAS_CUDA)
+            logger.info("easyocr_fallback_ready", gpu=_HAS_CUDA)
+        except ImportError:
+            self._easyocr_reader = None
+            logger.info("easyocr_not_available")
 
     async def run(self, image_bytes: bytes, extension: str = ".pdf") -> dict[str, Any]:
         start = time.monotonic()
@@ -65,10 +69,13 @@ class DocumentOCR:
                 result["processing_time_ms"] = int((time.monotonic() - start) * 1000)
                 return result
 
-        # Phase 3: Fallback to EasyOCR
-        result = self._run_easyocr(image_bytes)
-        result["processing_time_ms"] = int((time.monotonic() - start) * 1000)
-        return result
+        # Phase 3: Fallback to EasyOCR (if available)
+        if self._easyocr_reader is not None:
+            result = self._run_easyocr(image_bytes)
+            result["processing_time_ms"] = int((time.monotonic() - start) * 1000)
+            return result
+
+        return {"engine_name": "paddleocr", "raw_text": "", "error": "no_ocr_engine", "average_confidence": 0.0, "processing_time_ms": int((time.monotonic() - start) * 1000)}
 
     def _extract_pdf_text(self, content: bytes) -> dict[str, Any]:
         if not content.startswith(b"%PDF"):
@@ -126,6 +133,8 @@ class DocumentOCR:
         }
 
     def _run_easyocr(self, image_bytes: bytes) -> dict[str, Any]:
+        if self._easyocr_reader is None:
+            return {"engine_name": "easyocr", "raw_text": "", "error": "not_loaded", "average_confidence": 0.0}
         if not image_bytes or len(image_bytes) < 100:
             return {"engine_name": "easyocr", "raw_text": "", "error": "empty_image", "average_confidence": 0.0}
 
