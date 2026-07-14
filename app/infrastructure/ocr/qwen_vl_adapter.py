@@ -40,7 +40,7 @@ class QwenVLAdapter:
             return
 
         try:
-            from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+            from transformers import AutoModelForVision2Seq, AutoProcessor
             from qwen_vl_utils import process_vision_info
 
             # ponytail: use local model path from settings, fallback to HuggingFace
@@ -60,10 +60,9 @@ class QwenVLAdapter:
                     load_kwargs["attn_implementation"] = "sdpa"
                     logger.info("flash_attn_not_available_using_sdpa")
 
-            if bool(settings.VLM_MODEL_PATH):
-                load_kwargs["local_files_only"] = True
+            load_kwargs["local_files_only"] = bool(settings.VLM_MODEL_PATH)
             load_kwargs["trust_remote_code"] = True
-            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(**load_kwargs)
+            self._model = AutoModelForVision2Seq.from_pretrained(**load_kwargs)
             self._processor = AutoProcessor.from_pretrained(model_name)
             _model_instance = self._model
             _processor_instance = self._processor
