@@ -53,7 +53,12 @@ class QwenVLAdapter:
                 device_map="cuda:0" if _HAS_CUDA else None,
             )
             if _HAS_CUDA:
-                load_kwargs["attn_implementation"] = "flash_attention_2"
+                try:
+                    import flash_attn  # noqa: F401
+                    load_kwargs["attn_implementation"] = "flash_attention_2"
+                except ImportError:
+                    load_kwargs["attn_implementation"] = "sdpa"
+                    logger.info("flash_attn_not_available_using_sdpa")
 
             self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(**load_kwargs)
             self._processor = AutoProcessor.from_pretrained(model_name)
