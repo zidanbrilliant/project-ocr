@@ -23,3 +23,8 @@ ruff>=0.4
 mypy>=1.10
 black>=24.4
 pre-commit>=3.7
+
+# OCR engines (install at least one)
+# easyocr>=1.7       # lightweight fallback
+# paddleocr>=2.9     # best accuracy for Indonesian (requires paddlepaddle-gpu)
+# paddlepaddle-gpu>=3.0  # paddle backend for GPU
