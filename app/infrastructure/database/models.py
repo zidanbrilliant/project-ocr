@@ -127,7 +127,7 @@ class AIDocument(Base):
     confidence: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     confidence_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
     manual_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    doc_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -527,7 +527,7 @@ class AIArtifact(Base):
     file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     checksum_sha256: Mapped[str | None] = mapped_column(String(128), nullable=True)
     retention_until: Mapped[datetime | None] = mapped_column(nullable=True)
-    metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    artifact_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
 
     job = relationship("AIJob", back_populates="artifacts")
