@@ -5,6 +5,7 @@ from typing import Any
 import torch
 import numpy as np
 
+from app.shared.config.settings import settings
 from app.shared.logging.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,15 +43,19 @@ class QwenVLAdapter:
             from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
             from qwen_vl_utils import process_vision_info
 
-            model_name = "Qwen/Qwen2.5-VL-7B-Instruct"
-            logger.info("qwen_vl_loading_model", model=model_name)
+            # ponytail: use local model path from settings, fallback to HuggingFace
+            model_name = settings.VLM_MODEL_PATH or "Qwen/Qwen2.5-VL-7B-Instruct"
+            logger.info("qwen_vl_loading_model", model=model_name, local=bool(settings.VLM_MODEL_PATH))
 
-            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_name,
-                torch_dtype=torch.bfloat16 if _HAS_CUDA else torch.float32,
-                device_map="auto" if _HAS_CUDA else None,
-                attn_implementation="flash_attention_2" if _HAS_CUDA else "sdpa",
+            load_kwargs = dict(
+                pretrained_model_name_or_path=model_name,
+                torch_dtype=torch.float16,
+                device_map="cuda:0" if _HAS_CUDA else None,
             )
+            if _HAS_CUDA:
+                load_kwargs["attn_implementation"] = "flash_attention_2"
+
+            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(**load_kwargs)
             self._processor = AutoProcessor.from_pretrained(model_name)
             _model_instance = self._model
             _processor_instance = self._processor
@@ -103,7 +108,7 @@ class QwenVLAdapter:
 
             generated_ids = self._model.generate(
                 **inputs,
-                max_new_tokens=2048,
+                max_new_tokens=settings.VLM_MAX_TOKENS,
                 temperature=0.1,
                 top_p=0.9,
                 do_sample=False,

@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     WORKER_PREFETCH_COUNT: int = 1
     GPU_DEVICE_ID: int = 0
 
+    VLM_MODEL_PATH: str = ""
+    VLM_MAX_TOKENS: int = 2048
+
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"
     INTERNAL_API_KEY: str = ""
 
