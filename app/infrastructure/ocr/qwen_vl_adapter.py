@@ -47,34 +47,40 @@ def _suppress_bad_torch_addons() -> None:  # noqa: C901
 
     WHY THIS IS NEEDED
     ------------------
-    vLLM >= 0.6 imports ``torchcodec`` and accesses ``torchaudio`` at module
-    level for video multimodal support.  In a shared DGX conda environment two
-    problems arise before we even reach model loading:
+    vLLM >= 0.6 checks optional packages in TWO separate ways:
 
-    Problem 1 — torchcodec + missing FFmpeg
-        torchcodec.dlopen(libavutil.so.*) raises OSError when FFmpeg is absent.
+        ① import torchcodec             — resolved via sys.modules
+        ② importlib.metadata.version("torchcodec")  — reads dist-info on disk
 
-    Problem 2 — torchaudio CUDA version mismatch
-        torchaudio compiled against cu12.8 raises RuntimeError when PyTorch is
-        cu13.0.  vLLM calls ``importlib.util.find_spec("torchaudio")`` which,
-        if ``torchaudio`` is already in sys.modules with ``__spec__ = None``,
-        raises ``ValueError: torchaudio.__spec__ is None``.
+    These are completely independent systems.  Stubbing sys.modules only
+    fixes ①.  If the package is uninstalled (no dist-info on disk), ②
+    raises PackageNotFoundError (subclass of ImportError) even when the
+    sys.modules stub is in place — and since vLLM does not always catch
+    that error internally, it propagates to our except ImportError block.
 
-    THE BUG WE WERE HITTING
-    ------------------------
-    ``types.ModuleType(name)`` creates a module whose ``__spec__`` is ``None``.
-    ``importlib.util.find_spec(name)`` explicitly raises ValueError when it
-    finds a module in sys.modules whose __spec__ is None (Python 3.4+ contract).
-    So inserting a bare ModuleType stub actually makes things *worse*.
+    THREE-LAYER FIX
+    ---------------
+    Layer 1 — sys.modules stub
+        Pre-populate sys.modules with a fake module before vLLM imports it,
+        so ``import torchcodec`` resolves without touching the filesystem.
 
-    THE FIX
-    -------
-    Use ``importlib.machinery.ModuleSpec(name, loader=None)`` to give every
-    stub a valid (non-None) spec.  find_spec() then returns the spec cleanly
-    instead of raising, and vLLM sees the package as "present but empty" —
-    which is fine because we never use video/audio inference.
+    Layer 2 — valid __spec__ on every stub
+        importlib.util.find_spec() raises ValueError if __spec__ is None.
+        Use importlib.machinery.ModuleSpec(name, loader=None) instead of a
+        bare types.ModuleType() to satisfy that contract.
+
+    Layer 3 — importlib.metadata patch
+        importlib.metadata.version(name) reads dist-info from disk; it has
+        no knowledge of sys.modules.  We monkey-patch it to return "0.0.0"
+        for packages we have stubbed, so vLLM's version checks pass cleanly.
     """
     import importlib.machinery
+    import importlib.metadata as _imeta
+
+    # ------------------------------------------------------------------ #
+    # Track which packages we stub so Layer 3 knows what to intercept.
+    # ------------------------------------------------------------------ #
+    _stubbed: set[str] = set()
 
     def _make_stub(name: str) -> _types.ModuleType:
         """Return a ModuleType with a valid __spec__ (loader=None is legal)."""
@@ -83,8 +89,10 @@ def _suppress_bad_torch_addons() -> None:  # noqa: C901
         return m
 
     # ------------------------------------------------------------------ #
-    # 1. torchcodec — dlopen FFmpeg fails when FFmpeg is not installed
+    # Layer 1 + 2 — sys.modules stubs with valid __spec__
     # ------------------------------------------------------------------ #
+
+    # 1a. torchcodec — dlopen FFmpeg fails when FFmpeg is not installed
     if "torchcodec" not in sys.modules:
         try:
             import torchcodec  # type: ignore[import]  # noqa: F401
@@ -94,21 +102,18 @@ def _suppress_bad_torch_addons() -> None:  # noqa: C901
                 _full = f"torchcodec.{_sub}"
                 _m = _make_stub(_full)
                 sys.modules[_full] = _m
-                # expose as attribute so ``torchcodec.decoders`` attribute
-                # access works even if vLLM doesn't go through sys.modules
                 setattr(_root, _sub.split(".")[0], _m)
             sys.modules["torchcodec"] = _root
+            _stubbed.add("torchcodec")
             logger.debug("torchcodec_stubbed",
                          reason="FFmpeg shared libs not found; image-only mode")
 
-    # ------------------------------------------------------------------ #
-    # 2. torchaudio — CUDA version mismatch (cu12.8 vs cu13.0)
-    # ------------------------------------------------------------------ #
-    # Edge case: a previous import attempt may have left torchaudio in
-    # sys.modules with __spec__ = None (our old stub code).  Fix it first.
+    # 1b. torchaudio — CUDA version mismatch (cu12.8 vs cu13.0)
+    # Fix pre-existing stub from an earlier import attempt with __spec__=None.
     _ta_existing = sys.modules.get("torchaudio")
     if _ta_existing is not None and getattr(_ta_existing, "__spec__", None) is None:
         _ta_existing.__spec__ = importlib.machinery.ModuleSpec("torchaudio", loader=None)
+        _stubbed.add("torchaudio")
         logger.debug("torchaudio_spec_fixed",
                      reason="Patched pre-existing stub that had __spec__=None")
 
@@ -117,8 +122,46 @@ def _suppress_bad_torch_addons() -> None:  # noqa: C901
             import torchaudio  # type: ignore[import]  # noqa: F401
         except Exception:
             sys.modules["torchaudio"] = _make_stub("torchaudio")
+            _stubbed.add("torchaudio")
             logger.debug("torchaudio_stubbed",
                          reason="CUDA version mismatch; not needed for OCR")
+
+    # ------------------------------------------------------------------ #
+    # Layer 3 — patch importlib.metadata.version() for stubbed packages
+    #
+    # sys.modules stub  →  fixes ``import torchcodec``
+    # metadata patch    →  fixes ``importlib.metadata.version("torchcodec")``
+    #
+    # Without this, vLLM's internal version check raises:
+    #   PackageNotFoundError: No package metadata was found for torchcodec
+    # which is a subclass of ImportError and bubbles up to our warmup().
+    # ------------------------------------------------------------------ #
+    if _stubbed:
+        _real_version = _imeta.version  # keep reference to original
+
+        def _safe_version(dist_name: str, *args: Any, **kwargs: Any) -> str:
+            if dist_name in _stubbed:
+                return "0.0.0+stub"
+            return _real_version(dist_name, *args, **kwargs)
+
+        _imeta.version = _safe_version  # type: ignore[assignment]
+
+        # Some vLLM versions also call importlib.metadata.packages_distributions()
+        # or Distribution.from_name() — patch those too for robustness.
+        _real_from_name = _imeta.Distribution.from_name
+
+        @classmethod  # type: ignore[misc]
+        def _safe_from_name(cls: Any, name: str) -> Any:  # type: ignore[override]
+            if name in _stubbed:
+                # Return a minimal Distribution-like object
+                class _FakeDist:
+                    metadata: dict = {"Name": name, "Version": "0.0.0+stub"}
+                    name = dist_name if (dist_name := name) else name
+                return _FakeDist()
+            return _real_from_name.__func__(cls, name)  # type: ignore[attr-defined]
+
+        _imeta.Distribution.from_name = _safe_from_name
+        logger.debug("importlib_metadata_patched", stubbed=sorted(_stubbed))
 
 
 _suppress_bad_torch_addons()
