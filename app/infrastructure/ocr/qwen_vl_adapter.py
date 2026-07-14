@@ -40,7 +40,7 @@ class QwenVLAdapter:
             return
 
         try:
-            from transformers import AutoModelForVision2Seq, AutoProcessor
+            from transformers import AutoProcessor, AutoModel
             from qwen_vl_utils import process_vision_info
 
             # ponytail: use local model path from settings, fallback to HuggingFace
@@ -49,7 +49,6 @@ class QwenVLAdapter:
 
             load_kwargs = dict(
                 pretrained_model_name_or_path=model_name,
-                torch_dtype=torch.float16,
                 device_map="cuda:0" if _HAS_CUDA else None,
             )
             if _HAS_CUDA:
@@ -62,7 +61,7 @@ class QwenVLAdapter:
 
             load_kwargs["local_files_only"] = bool(settings.VLM_MODEL_PATH)
             load_kwargs["trust_remote_code"] = True
-            self._model = AutoModelForVision2Seq.from_pretrained(**load_kwargs)
+            self._model = AutoModel.from_pretrained(**load_kwargs)
             self._processor = AutoProcessor.from_pretrained(model_name)
             _model_instance = self._model
             _processor_instance = self._processor
