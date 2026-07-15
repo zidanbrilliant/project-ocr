@@ -2,15 +2,12 @@ import time
 from typing import Any
 
 import numpy as np
-import torch
 
 from app.shared.config.settings import settings
 from app.shared.health_registry import register as _register_health
 from app.shared.logging.logger import get_logger
 
 logger = get_logger(__name__)
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 class YOLOAdapter:
@@ -23,8 +20,9 @@ class YOLOAdapter:
             from ultralytics import YOLO
             self._model = YOLO(settings.YOLO_MODEL_PATH)
             self._class_names = self._model.names
-            _register_health("yolo", available=True, model=str(settings.YOLO_MODEL_PATH), device=DEVICE)
-            logger.info("yolo_loaded", classes=dict(self._class_names), device=DEVICE)
+            device = _get_device()
+            _register_health("yolo", available=True, model=str(settings.YOLO_MODEL_PATH), device=device)
+            logger.info("yolo_loaded", classes=dict(self._class_names), device=device)
             self._loaded = True
         except Exception as e:
             _register_health("yolo", available=False, error=str(e), model=str(settings.YOLO_MODEL_PATH))
@@ -54,7 +52,7 @@ class YOLOAdapter:
                 imgsz=input_size or settings.YOLO_INPUT_SIZE,
                 conf=settings.YOLO_CONFIDENCE_THRESHOLD,
                 iou=settings.YOLO_NMS_THRESHOLD,
-                device=DEVICE,
+                device=_get_device(),
                 verbose=False,
             )
             all_detections: list[dict[str, Any]] = []
@@ -77,3 +75,12 @@ class YOLOAdapter:
         except Exception as e:
             logger.warning("yolo_detect_failed", error=str(e))
             return []
+
+
+def _get_device() -> str:
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"

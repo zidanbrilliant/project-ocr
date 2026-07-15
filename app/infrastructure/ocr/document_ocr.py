@@ -13,13 +13,6 @@ from app.shared.logging.logger import get_logger
 
 logger = get_logger(__name__)
 
-try:
-    import torch
-
-    _HAS_CUDA = torch.cuda.is_available()
-except ImportError:
-    _HAS_CUDA = False
-
 
 class DocumentOCR:
     """Document OCR with explicit provider selection.
@@ -39,7 +32,7 @@ class DocumentOCR:
 
     async def warmup(self) -> None:
         os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-        _register_health("document_ocr", available=True, provider=self._provider, gpu=_HAS_CUDA)
+        _register_health("document_ocr", available=True, provider=self._provider)
 
         if self._provider == "qwen":
             await self._qwen.warmup()

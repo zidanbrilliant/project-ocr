@@ -27,23 +27,16 @@ import os
 import time
 from typing import Any
 
+# vLLM starts CUDA workers in subprocesses. On DGX Spark/Streamlit, CUDA may
+# already be touched by imports, so force spawn instead of fork.
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+os.environ.pop("TORCHCODEC_ENABLED", None)
+
 from app.shared.config.settings import settings
 from app.shared.health_registry import register as _register_health
 from app.shared.logging.logger import get_logger
 
 logger = get_logger(__name__)
-
-try:
-    import torch
-
-    _HAS_CUDA = torch.cuda.is_available()
-except ImportError:
-    torch = None  # type: ignore[assignment]
-    _HAS_CUDA = False
-
-# ponytail: suppress vLLM optional deps that break on missing FFmpeg
-os.environ.setdefault("VLLM_DISABLE_TORCHCODEC", "1")
-os.environ.pop("TORCHCODEC_ENABLED", None)
 
 # Stub torchcodec and torchaudio so vLLM import doesn't crash
 import sys as _sys
@@ -131,18 +124,12 @@ class QwenVLAdapter:
                 max_num_seqs=1,
             )
 
-            if not _HAS_CUDA:
-                # CPU fallback (very slow, for smoke-testing only)
-                llm_kwargs.pop("quantization", None)
-                llm_kwargs["device"] = "cpu"
-                logger.warning("qwen_vl_cpu_mode", reason="No CUDA device detected")
-
             self._llm = LLM(**llm_kwargs)
             _llm_instance = self._llm
             self._available = True
             self._load_error = None
-            _register_health("qwen2.5-vl", available=True, gpu=_HAS_CUDA, quant=quant)
-            logger.info("qwen_vl_loaded", gpu=_HAS_CUDA, backend="vllm", quant=quant)
+            _register_health("qwen2.5-vl", available=True, gpu=True, quant=quant)
+            logger.info("qwen_vl_loaded", gpu=True, backend="vllm", quant=quant)
 
         except ImportError as exc:
             self._load_error = f"ImportError: {str(exc)}"
