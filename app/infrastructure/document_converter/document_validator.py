@@ -1,4 +1,3 @@
-import imghdr
 import struct
 from typing import Any
 
@@ -42,16 +41,14 @@ class DocumentValidator:
             result["content_type"] = "application/pdf"
 
         elif ext in (".jpg", ".jpeg"):
-            img_type = imghdr.what(None, h=content)
-            if img_type not in ("jpeg",):
+            if not content.startswith(b"\xff\xd8\xff"):
                 raise DocumentError("File corrupt or unreadable.", {"filename": filename, "reason": "invalid_jpeg"})
             result["content_type"] = "image/jpeg"
             result["page_count"] = 1
             result.update(self._get_image_dimensions(content))
 
         elif ext == ".png":
-            img_type = imghdr.what(None, h=content)
-            if img_type != "png":
+            if not content.startswith(b"\x89PNG\r\n\x1a\n"):
                 raise DocumentError("File corrupt or unreadable.", {"filename": filename, "reason": "invalid_png"})
             result["content_type"] = "image/png"
             result["page_count"] = 1

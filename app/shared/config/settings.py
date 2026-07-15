@@ -1,5 +1,6 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -11,11 +12,14 @@ class Settings(BaseSettings):
     )
 
     APP_ENV: Literal["local", "staging", "production"] = "local"
+    RUN_MODE: Literal["standalone", "api", "worker"] = "standalone"
     SERVICE_NAME: str = "ai-invoice-verification-agent"
     LOG_LEVEL: str = "INFO"
 
     DATABASE_URL: str = ""
     RABBITMQ_URL: str = ""
+    ENABLE_DATABASE: bool = False
+    ENABLE_RABBITMQ: bool = False
 
     RABBITMQ_INPUT_EXCHANGE: str = "vision.ai.invoice.request.exchange"
     RABBITMQ_INPUT_QUEUE: str = "vision.ai.invoice.request.queue"
@@ -43,8 +47,9 @@ class Settings(BaseSettings):
     YOLO_NMS_THRESHOLD: float = 0.45
 
     OCR_ENGINE: str = "document_ocr"
+    OCR_PROVIDER: Literal["qwen", "paddleocr_vl"] = "paddleocr_vl"
     OCR_USE_GPU: bool = True
-    OCR_FALLBACK_ENABLED: bool = True
+    OCR_ENABLE_PDF_TEXT_EXTRACTION: bool = True
 
     CONFIDENCE_THRESHOLD: int = 80
     AMOUNT_STAMP_DUTY_THRESHOLD: int = 5_000_000
@@ -67,6 +72,11 @@ class Settings(BaseSettings):
 
     VLM_MODEL_PATH: str = ""
     VLM_MAX_TOKENS: int = 2048
+    PADDLEOCR_VL_MODEL_DIR: str = "/mnt/models/PaddleOCR-VL-1.6"
+
+    ENABLE_QWEN_REASONING: bool = False
+    QWEN_REASONING_MODEL_PATH: str = ""
+    QWEN_REASONING_MAX_TOKENS: int = 1024
 
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"
     INTERNAL_API_KEY: str = ""

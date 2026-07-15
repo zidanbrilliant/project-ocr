@@ -1,20 +1,20 @@
 import asyncio
 import hashlib
-import os
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import streamlit as st
-import numpy as np
 import cv2
+import numpy as np
+import streamlit as st
 
+from app.shared.config.settings import settings
 from scripts.direct_processor import DirectProcessor
 from scripts.result_adapter import normalize_pipeline_result_for_ui
 
-st.set_page_config(page_title="Vision AI", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="Vision AI", page_icon="VI", layout="wide")
 
 DOC_TYPES = {"INV": "Invoice", "DN": "Delivery Note"}
 
@@ -26,160 +26,162 @@ DEFAULT_STATE = {
     "processing_time_ms": None,
     "uploaded_file_hash": None,
     "selected_page_index": 0,
-    "artifact_directory": None,
-    "active_view": "Preview",
 }
 
 
-def init_state():
+def init_state() -> None:
     for key, value in DEFAULT_STATE.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
-def clear_processing_state():
+def clear_processing_state() -> None:
     for key in DEFAULT_STATE:
         st.session_state.pop(key, None)
     init_state()
 
 
-_processor_instance = None
-
-def get_processor():
-    global _processor_instance
-    if _processor_instance is None:
-        from scripts.direct_processor import DirectProcessor
-        _processor_instance = DirectProcessor()
-    return _processor_instance
+@st.cache_resource(show_spinner=False)
+def get_processor() -> DirectProcessor:
+    return DirectProcessor()
 
 
-def draw_bboxes(img: np.ndarray, detections: list[dict], color=(0, 255, 0)) -> np.ndarray:
+def draw_bboxes(img: np.ndarray, detections: list[dict], color=(0, 160, 90)) -> np.ndarray:
     vis = img.copy()
-    for d in detections:
-        bbox = d.get("bbox", [])
+    for detection in detections:
+        bbox = detection.get("bbox", [])
         if bbox and len(bbox) == 4:
-            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-            conf = d.get("confidence", 0)
-            label = f"{d.get('label', '?')} {conf:.1f}%"
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            conf = detection.get("confidence", 0)
+            label = f"{detection.get('label', '?')} {conf:.1f}%"
             cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(vis, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            cv2.putText(vis, label, (x1, max(y1 - 5, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
     return vis
 
 
-async def main_ui():
+async def main_ui() -> None:
     init_state()
-    st.title("🔍 Vision AI — Document Inspector")
+    st.title("Vision AI Document Inspector")
 
     with st.sidebar:
-        st.subheader("Model Status")
-        p = get_processor()
-        
-        # Check Qwen2.5-VL status
-        qwen_avail = getattr(p._ocr._qwen, "_available", False)
-        if qwen_avail:
-            st.success("🤖 Qwen2.5-VL: Ready")
-        else:
-            qwen_err = getattr(p._ocr._qwen, "_load_error", "Not warmed up yet")
-            st.error(f"🤖 Qwen2.5-VL: Not Available\n\n*Error: {qwen_err}*")
+        st.subheader("Runtime")
+        st.caption(f"Mode: {settings.RUN_MODE}")
+        st.caption(f"OCR Provider: {settings.OCR_PROVIDER}")
+        st.caption(f"Database: {'enabled' if settings.ENABLE_DATABASE else 'disabled'}")
+        st.caption(f"RabbitMQ: {'enabled' if settings.ENABLE_RABBITMQ else 'disabled'}")
 
-        # Check YOLO status
-        yolo_avail = getattr(p._yolo, "_model", None) is not None
-        if yolo_avail:
-            st.success("🎯 YOLO: Ready")
-        else:
-            st.error("🎯 YOLO: Not Loaded")
+        processor = get_processor()
+        _render_model_status(processor)
 
-        # Check EasyOCR fallback status
-        easy_avail = getattr(p._ocr, "_easyocr_reader", None) is not None
-        if easy_avail:
-            st.success("📝 EasyOCR Fallback: Ready")
-        else:
-            st.warning("📝 EasyOCR Fallback: Not Available")
-
-        st.markdown("---")
+        st.divider()
         if st.button("Clear Results", use_container_width=True):
             clear_processing_state()
+            st.rerun()
 
     col_left, col_right = st.columns([1, 2])
 
     with col_left:
         st.subheader("Upload Document")
-        uploaded = st.file_uploader(
-            "Choose PDF, JPG, or PNG",
-            type=["pdf", "jpg", "jpeg", "png"],
-        )
+        uploaded = st.file_uploader("Choose PDF, JPG, or PNG", type=["pdf", "jpg", "jpeg", "png"])
         doc_type = st.selectbox("Document Type", options=list(DOC_TYPES.keys()), format_func=lambda x: DOC_TYPES[x])
 
-        if st.button("🚀 Process", type="primary", disabled=uploaded is None):
-            with st.spinner("Processing..."):
-                p = get_processor()
-                
-                # Check if Qwen or YOLO are not loaded. If so, force warmup.
-                qwen_avail = getattr(p._ocr._qwen, "_available", False)
-                yolo_avail = getattr(p._yolo, "_loaded", False)
-                if not qwen_avail or not yolo_avail:
-                    await p.warmup()
+        if st.button("Process", type="primary", disabled=uploaded is None, use_container_width=True):
+            await _process_uploaded_file(uploaded, doc_type)
 
-                uploaded_bytes = uploaded.getvalue()
-                if not uploaded_bytes:
-                    st.error("Empty file")
-                    st.stop()
-
-                file_hash = hashlib.sha256(uploaded_bytes).hexdigest()
-                file_name = uploaded.name
-                content_type = uploaded.type or ""
-                file_size = len(uploaded_bytes)
-
-                started = time.perf_counter()
-                raw_result = await p.process(uploaded_bytes, file_name, doc_type)
-                elapsed = round((time.perf_counter() - started) * 1000)
-
-                ui_result = normalize_pipeline_result_for_ui(
-                    raw_result=raw_result,
-                    file_name=file_name,
-                    content_type=content_type,
-                    file_size_bytes=file_size,
-                    processing_time_ms=elapsed,
-                )
-
-                st.session_state.raw_result = raw_result
-                st.session_state.ui_result = ui_result
-                st.session_state.processing_time_ms = elapsed
-                st.session_state.processing_done = True
-                st.session_state.processing_error = None
-                st.session_state.uploaded_file_hash = file_hash
-                st.session_state.selected_page_index = 0
-                st.rerun()
-
-    # Display results
     ui_result = st.session_state.get("ui_result")
-    if ui_result is None:
-        with col_right:
-            st.info("Upload a document and click **Process**.")
-        st.stop()
-
     with col_right:
+        if st.session_state.get("processing_error"):
+            st.error(st.session_state.processing_error)
+
+        if ui_result is None:
+            st.info("Upload a document and click Process.")
+            return
+
         _display_results(ui_result)
 
 
-def _display_results(ui_result: dict):
+def _render_model_status(processor: DirectProcessor) -> None:
+    ocr = processor._ocr
+    provider = getattr(ocr, "_provider", settings.OCR_PROVIDER)
+
+    if provider == "qwen":
+        qwen = getattr(ocr, "_qwen", None)
+        if getattr(qwen, "_available", False):
+            st.success("Qwen2.5-VL OCR: ready")
+        else:
+            st.warning(f"Qwen2.5-VL OCR: not loaded ({getattr(qwen, '_load_error', 'warmup pending')})")
+
+    if provider == "paddleocr_vl":
+        paddle = getattr(ocr, "_paddle", None)
+        if getattr(paddle, "_available", False):
+            st.success("PaddleOCR-VL: ready")
+        else:
+            st.warning(f"PaddleOCR-VL: not loaded ({getattr(paddle, '_load_error', 'warmup pending')})")
+
+    yolo_loaded = getattr(processor._yolo, "_loaded", False)
+    if yolo_loaded:
+        st.success("YOLO: ready")
+    else:
+        st.warning("YOLO: not loaded")
+
+
+async def _process_uploaded_file(uploaded, doc_type: str) -> None:
+    with st.spinner("Processing document..."):
+        processor = get_processor()
+        await processor.warmup()
+
+        uploaded_bytes = uploaded.getvalue()
+        if not uploaded_bytes:
+            st.session_state.processing_error = "Uploaded file is empty."
+            return
+
+        file_hash = hashlib.sha256(uploaded_bytes).hexdigest()
+        file_name = uploaded.name
+        content_type = uploaded.type or ""
+        file_size = len(uploaded_bytes)
+
+        try:
+            started = time.perf_counter()
+            raw_result = await processor.process(uploaded_bytes, file_name, doc_type)
+            elapsed = round((time.perf_counter() - started) * 1000)
+
+            ui_result = normalize_pipeline_result_for_ui(
+                raw_result=raw_result,
+                file_name=file_name,
+                content_type=content_type,
+                file_size_bytes=file_size,
+                processing_time_ms=elapsed,
+            )
+
+            st.session_state.raw_result = raw_result
+            st.session_state.ui_result = ui_result
+            st.session_state.processing_time_ms = elapsed
+            st.session_state.processing_done = True
+            st.session_state.processing_error = None
+            st.session_state.uploaded_file_hash = file_hash
+            st.session_state.selected_page_index = 0
+        except Exception as exc:
+            st.session_state.processing_error = str(exc)
+        st.rerun()
+
+
+def _display_results(ui_result: dict) -> None:
     pages = ui_result.get("pages", [])
     if not pages:
-        st.error("No pages in result")
+        st.error("No pages in result.")
         return
 
     doc = ui_result.get("document", {})
     total_pages = len(pages)
-    sel_idx = min(st.session_state.selected_page_index, total_pages - 1)
-
-    sel_idx = st.selectbox(
+    selected_index = min(st.session_state.selected_page_index, total_pages - 1)
+    selected_index = st.selectbox(
         "Page",
         options=list(range(total_pages)),
-        index=sel_idx,
+        index=selected_index,
         format_func=lambda i: f"Page {pages[i]['page_number']} of {total_pages}",
         key="selected_page_index",
     )
-    sel_page = pages[sel_idx]
+    selected_page = pages[selected_index]
 
     st.caption(
         f"Status: {ui_result['status']} | "
@@ -188,27 +190,23 @@ def _display_results(ui_result: dict):
         f"{doc.get('size_kb', 0)} KB"
     )
 
-    views = ["Preview", "OCR", "Detection", "Fields", "Confidence"]
-    tabs = st.tabs(views)
-    view_map = dict(zip(views, tabs))
+    preview_tab, ocr_tab, detection_tab, fields_tab, confidence_tab = st.tabs(
+        ["Preview", "OCR", "Detection", "Fields", "Confidence"]
+    )
 
-    with view_map["Preview"]:
-        _render_preview(sel_page, sel_idx, pages)
-
-    with view_map["OCR"]:
-        _render_ocr(sel_page, sel_idx)
-
-    with view_map["Detection"]:
-        _render_detection(sel_page, sel_idx, pages)
-
-    with view_map["Fields"]:
-        _render_fields(sel_page, sel_idx)
-
-    with view_map["Confidence"]:
-        _render_confidence(ui_result, sel_page)
+    with preview_tab:
+        _render_preview(selected_page, pages)
+    with ocr_tab:
+        _render_ocr(selected_page)
+    with detection_tab:
+        _render_detection(selected_page, selected_index)
+    with fields_tab:
+        _render_fields(selected_page)
+    with confidence_tab:
+        _render_confidence(ui_result, selected_page)
 
 
-def _render_preview(page: dict, idx: int, pages: list):
+def _render_preview(page: dict, pages: list) -> None:
     cols = st.columns(4)
     cols[0].metric("Extension", page.get("extension", "?"))
     cols[1].metric("Pages", len(pages))
@@ -219,20 +217,19 @@ def _render_preview(page: dict, idx: int, pages: list):
     if preview and preview.get("image_bytes"):
         st.image(preview["image_bytes"], caption=f"Page {page['page_number']}", width=800)
     else:
-        st.caption(f"Page {page['page_number']}: No preview")
+        st.caption(f"Page {page['page_number']}: no preview")
 
 
-def _render_ocr(page: dict, idx: int):
+def _render_ocr(page: dict) -> None:
     ocr = page.get("ocr", {})
     raw_text = ocr.get("raw_text", "")
     if not raw_text or raw_text == "(empty)":
         raw_text = ""
 
     if ocr.get("status") == "FAILED":
-        err_msg = ocr.get("error") or "Check 'Model Status' in sidebar to see if Qwen is loaded."
-        st.error(f"OCR Failed: {err_msg}")
+        st.error(f"OCR failed: {ocr.get('error') or 'selected OCR provider returned no text'}")
 
-    st.text_area("Raw Text", raw_text or "(empty)", height=300)
+    st.text_area("Raw Text", raw_text or "(empty)", height=320)
     cols = st.columns(3)
     cols[0].metric("Engine", ocr.get("engine", "?"))
     cols[1].metric("Avg Confidence", f"{ocr.get('avg_confidence', 0)}%")
@@ -244,73 +241,77 @@ def _render_ocr(page: dict, idx: int):
             st.json(blocks[:30])
 
 
-def _render_detection(page: dict, idx: int, pages: list):
-    dets = page.get("detections", [])
-    agg = page.get("detection_aggregated", {})
+def _render_detection(page: dict, idx: int) -> None:
+    detections = page.get("detections", [])
+    aggregated = page.get("detection_aggregated", {})
 
-    if agg:
-        rows = []
-        for obj_type, info in agg.items():
-            rows.append({
-                "Object": obj_type,
-                "Result": info.get("result", "?"),
-                "Confidence": f"{info.get('confidence', 0):.1f}%",
-            })
+    if aggregated:
         st.subheader("Detection Summary")
-        st.table(rows)
+        st.table(
+            [
+                {
+                    "Object": obj_type,
+                    "Result": info.get("result", "?"),
+                    "Confidence": f"{info.get('confidence', 0):.1f}%",
+                }
+                for obj_type, info in aggregated.items()
+            ]
+        )
 
-    if dets:
+    if detections:
         st.subheader("All Detections")
-        rows2 = []
-        for d in dets:
-            rows2.append({
-                "Label": d.get("label", "?"),
-                "Confidence": f"{d.get('confidence', 0):.1f}%",
-                "Page": d.get("page_number", idx + 1),
-            })
-        st.table(rows2)
+        st.table(
+            [
+                {
+                    "Label": detection.get("label", "?"),
+                    "Confidence": f"{detection.get('confidence', 0):.1f}%",
+                    "Page": detection.get("page_number", idx + 1),
+                }
+                for detection in detections
+            ]
+        )
 
     preview = page.get("preview")
     if preview and preview.get("image_bytes") is not None:
-        img_bytes = preview["image_bytes"]
-        arr = np.frombuffer(img_bytes, dtype=np.uint8)
+        arr = np.frombuffer(preview["image_bytes"], dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is not None:
-            vis = draw_bboxes(img, dets)
-            st.image(vis, caption=f"Detections — Page {page['page_number']}", width=800)
-    elif isinstance(page.get("preview"), dict) and page["preview"].get("image_bytes"):
-        pass
-    else:
-        st.caption("Preview not available for annotation")
+            st.image(draw_bboxes(img, detections), caption=f"Detections - Page {page['page_number']}", width=800)
+            return
+    st.caption("Preview not available for annotation.")
 
 
-def _render_fields(page: dict, idx: int):
+def _render_fields(page: dict) -> None:
     fields = page.get("fields", {})
-    if fields:
-        rows = []
-        for name, fdata in fields.items():
-            raw_val = fdata.get("value", "—")
-            if isinstance(raw_val, (int, float)):
-                raw_val = str(raw_val)
-            raw_conf = fdata.get("confidence", "—")
-            if isinstance(raw_conf, (int, float)):
-                raw_conf = f"{raw_conf}%"
-            rows.append({"Field": name, "Value": raw_val, "Confidence": raw_conf})
-        st.table(rows)
-    else:
-        st.warning("No fields extracted")
+    if not fields:
+        st.warning("No fields extracted.")
+        return
+
+    rows = []
+    for name, field_data in fields.items():
+        value = field_data.get("value", "-")
+        confidence = field_data.get("confidence", "-")
+        rows.append(
+            {
+                "Field": name,
+                "Value": str(value),
+                "Confidence": f"{confidence}%" if isinstance(confidence, (int, float)) else confidence,
+            }
+        )
+    st.table(rows)
 
 
-def _render_confidence(ui_result: dict, page: dict):
+def _render_confidence(ui_result: dict, page: dict) -> None:
     raw = ui_result.get("pipeline_raw", {})
     st.metric("Total Confidence", f"{raw.get('total_confidence', 'N/A')}%")
-    st.metric("Has OCR", "✅" if raw.get("has_ocr") else "❌")
-    st.metric("Has Detection", "✅" if raw.get("has_detection") else "❌")
+    st.metric("Has OCR", "yes" if raw.get("has_ocr") else "no")
+    st.metric("Has Detection", "yes" if raw.get("has_detection") else "no")
     st.metric("Overall Status", ui_result.get("status", "?"))
     st.metric("Processing Time", f"{ui_result.get('processing_time_ms', 0)}ms")
 
-    if page.get("detections"):
-        avg_conf = sum(d.get("confidence", 0) for d in page["detections"]) / len(page["detections"])
+    detections = page.get("detections") or []
+    if detections:
+        avg_conf = sum(d.get("confidence", 0) for d in detections) / len(detections)
         st.metric("Avg Detection Confidence", f"{avg_conf:.1f}%")
 
 

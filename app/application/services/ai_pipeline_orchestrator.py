@@ -259,7 +259,7 @@ class AIPipelineOrchestrator:
                         processing_result=statuses.INTERNAL_ERROR,
                         errors=[{"stage": "PAGE", "error": str(pr)}],
                     ))
-                    ocr_results.append({"engine_name": "easyocr", "raw_text": "", "average_confidence": 0.0})
+                    ocr_results.append({"engine_name": settings.OCR_PROVIDER, "raw_text": "", "average_confidence": 0.0})
                     barcode_results.append({"barcode_found": False, "barcode_decoded": False})
                 else:
                     ocr_res, bc_res = pr
@@ -270,7 +270,7 @@ class AIPipelineOrchestrator:
                         processing_status=statuses.COMPLETED,
                         processing_result=statuses.SUCCESS,
                         ocr_raw_text=ocr_res.get("raw_text"),
-                        ocr_engine=ocr_res.get("engine_name", "easyocr"),
+                        ocr_engine=ocr_res.get("engine_name", settings.OCR_PROVIDER),
                         ocr_confidence=ocr_res.get("average_confidence"),
                         detections=[d for d in raw_detections if d.get("page_number", 1) == i + 1],
                         barcodes=[bc_res],
@@ -281,7 +281,7 @@ class AIPipelineOrchestrator:
             # Aggregate OCR for field extraction
             all_text = "\n".join(r.get("raw_text", "") or "" for r in ocr_results if r.get("raw_text"))
             ocr_aggregated = {
-                "engine_name": ocr_results[0].get("engine_name", "easyocr") if ocr_results else "easyocr",
+                "engine_name": ocr_results[0].get("engine_name", settings.OCR_PROVIDER) if ocr_results else settings.OCR_PROVIDER,
                 "raw_text": all_text,
                 "average_confidence": sum(r.get("average_confidence", 0) or 0 for r in ocr_results) / max(len(ocr_results), 1),
             }

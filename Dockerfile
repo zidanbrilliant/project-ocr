@@ -18,3 +18,7 @@ CMD ["uvicorn", "app.interfaces.api.main:app", "--host", "0.0.0.0", "--port", "8
 
 FROM base AS worker
 CMD ["python", "-m", "app.workers.worker_main"]
+
+FROM base AS streamlit
+EXPOSE 8501
+CMD ["streamlit", "run", "scripts/upload_app.py", "--server.address=0.0.0.0", "--server.port=8501"]

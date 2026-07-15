@@ -12,22 +12,19 @@ Environment / settings required
                     /mnt/models/Qwen2.5-VL-7B-Instruct-AWQ
   VLM_MAX_TOKENS  – maximum new tokens to generate (default 2048)
 
-Fallback behaviour
-------------------
+Failure behaviour
+-----------------
   If vLLM is not installed *or* the model directory does not exist,
-  _available stays False and every call to run() returns an empty result
-  dict so that DocumentOCR can fall through to EasyOCR gracefully.
+  _available stays False and every call to run() returns an explicit
+  model_not_loaded error.
 """
 
 from __future__ import annotations
 
-import base64
 import io
 import os
 import time
 from typing import Any
-
-import torch
 
 from app.shared.config.settings import settings
 from app.shared.health_registry import register as _register_health
@@ -35,7 +32,13 @@ from app.shared.logging.logger import get_logger
 
 logger = get_logger(__name__)
 
-_HAS_CUDA = torch.cuda.is_available()
+try:
+    import torch
+
+    _HAS_CUDA = torch.cuda.is_available()
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    _HAS_CUDA = False
 
 # ponytail: suppress vLLM optional deps that break on missing FFmpeg
 os.environ.setdefault("VLLM_DISABLE_TORCHCODEC", "1")
@@ -119,7 +122,7 @@ class QwenVLAdapter:
                 quantization=quant,
                 dtype="float16",            # AWQ does not support bfloat16 yet
                 trust_remote_code=True,
-                # Limit GPU memory to leave headroom for YOLO + EasyOCR
+                # Limit GPU memory to leave headroom for YOLO and OCR parsing.
                 gpu_memory_utilization=0.70,
                 max_model_len=4096,
                 download_dir=None,
@@ -160,10 +163,32 @@ class QwenVLAdapter:
     async def run(self, image_bytes: bytes, extension: str = ".pdf") -> dict[str, Any]:
         return await self._run_qwen(image_bytes)
 
-    async def _run_qwen(self, image_bytes: bytes) -> dict[str, Any]:
+    async def reason(
+        self,
+        image_bytes: bytes,
+        ocr_text: str,
+        fields: dict[str, Any],
+        detections: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        prompt = (
+            "You are validating Toyota invoice or delivery-note documents. "
+            "Use the image, OCR text, extracted fields, and detections to reason about the document. "
+            "Return compact JSON only with keys: document_type, corrected_fields, issues, confidence, summary.\n\n"
+            f"OCR_TEXT:\n{ocr_text[:6000]}\n\n"
+            f"EXTRACTED_FIELDS:\n{fields}\n\n"
+            f"DETECTIONS:\n{detections[:50]}"
+        )
+        return await self._run_qwen(image_bytes, prompt_instruction=prompt, engine_name="qwen2.5-vl-reasoning")
+
+    async def _run_qwen(
+        self,
+        image_bytes: bytes,
+        prompt_instruction: str | None = None,
+        engine_name: str = "qwen2.5-vl",
+    ) -> dict[str, Any]:
         if not self._available or self._llm is None:
             return {
-                "engine_name": "qwen2.5-vl",
+                "engine_name": engine_name,
                 "raw_text": "",
                 "error": "model_not_loaded",
                 "average_confidence": 0.0,
@@ -174,30 +199,15 @@ class QwenVLAdapter:
         try:
             from vllm import SamplingParams  # type: ignore[import]
 
-            # ----------------------------------------------------------------
-            # Build a Qwen2.5-VL chat prompt with the image embedded as
-            # base64 data-URI so vLLM's vision pipeline can decode it.
-            # ----------------------------------------------------------------
-            b64 = base64.b64encode(image_bytes).decode("ascii")
-
-            # Detect MIME type from magic bytes
-            if image_bytes[:4] == b"%PDF":
-                mime = "image/png"   # caller should have rasterised PDFs first
-            elif image_bytes[:3] == b"\xff\xd8\xff":
-                mime = "image/jpeg"
-            elif image_bytes[:4] == b"\x89PNG":
-                mime = "image/png"
-            else:
-                mime = "image/png"
-
-            data_uri = f"data:{mime};base64,{b64}"
-
+            instruction = prompt_instruction or (
+                "Extract ALL text from this document image exactly as written. "
+                "Preserve the original layout order. Return only the extracted text, no explanations."
+            )
             prompt_text = (
                 "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
                 "<|im_start|>user\n"
                 f"<|vision_start|><|image_pad|><|vision_end|>"
-                "Extract ALL text from this document image exactly as written. "
-                "Preserve the original layout order. Return only the extracted text, no explanations."
+                f"{instruction}"
                 "<|im_end|>\n"
                 "<|im_start|>assistant\n"
             )
@@ -227,7 +237,7 @@ class QwenVLAdapter:
             tokens = [{"text": ln, "confidence": 95.0} for ln in lines]
 
             return {
-                "engine_name": "qwen2.5-vl",
+                "engine_name": engine_name,
                 "raw_text": output_text,
                 "tokens_json": tokens,
                 "average_confidence": 95.0,
@@ -238,7 +248,7 @@ class QwenVLAdapter:
             logger.exception("qwen_vl_inference_failed")
             elapsed_ms = int((time.monotonic() - start) * 1000)
             return {
-                "engine_name": "qwen2.5-vl",
+                "engine_name": engine_name,
                 "raw_text": "",
                 "error": "inference_exception",
                 "average_confidence": 0.0,

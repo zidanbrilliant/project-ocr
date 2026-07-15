@@ -65,7 +65,7 @@ class BusinessRuleEvaluator:
 
         stamp_detected = any(d.result == "OK" and d.object_type == "stamp" for d in detections)
         if self._config.require_stamp and not stamp_detected:
-            failed.append(FailedRule("INV-R005", "Company stamp required", "Missing company stamp."))
+            failed.append(FailedRule("INV-STAMP-R005", "Company stamp required", "Missing company stamp."))
 
         signature_detected = any(d.result == "OK" and d.object_type == "signature" for d in detections)
         if self._config.require_signature and not signature_detected:

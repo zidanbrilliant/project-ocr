@@ -2,7 +2,9 @@ from app.domain.entities.business_validation_result import BusinessValidationRes
 
 
 class RemarkPolicy:
-    def generate(self, validation: BusinessValidationResult) -> str:
+    def generate(self, validation: BusinessValidationResult, doc_error: bool = False) -> str:
+        if doc_error:
+            return "Document cannot be processed. Please contact support."
         if validation.passed:
             return "Verification passed."
         if validation.failed_rules:

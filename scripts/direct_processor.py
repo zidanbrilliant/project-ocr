@@ -10,7 +10,6 @@ import numpy as np
 from app.domain.entities.ai_job import AIJob as AIJobEntity
 from app.domain.entities.business_validation_result import BusinessValidationResult
 from app.domain.entities.final_result import FinalResult
-from app.domain.entities.final_result import FinalResult
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
 from app.domain.services.confidence_policy import ConfidencePolicy
 from app.domain.services.remark_policy import RemarkPolicy
@@ -25,6 +24,7 @@ from app.infrastructure.document_converter.document_validator import DocumentVal
 from app.infrastructure.document_converter.image_preprocessor import ImagePreprocessor
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
 from app.infrastructure.ocr.document_ocr import DocumentOCR
+from app.infrastructure.ocr.qwen_vl_adapter import QwenVLAdapter
 from app.infrastructure.storage.temp_file_manager import TempFileManager
 from app.shared.config.settings import settings
 from app.shared.constants import return_codes, statuses
@@ -54,6 +54,7 @@ class DirectProcessor:
         self._temp_mgr = TempFileManager()
 
         self._ocr = DocumentOCR()
+        self._reasoning_qwen = QwenVLAdapter() if settings.ENABLE_QWEN_REASONING else None
 
         self._yolo = YOLOAdapter()
 
@@ -65,7 +66,11 @@ class DirectProcessor:
 
     async def warmup(self) -> None:
         logger.info("processor_warmup_start")
-        for name, eng in [("document_ocr", self._ocr), ("yolo", self._yolo)]:
+        engines = [("document_ocr", self._ocr), ("yolo", self._yolo)]
+        if self._reasoning_qwen is not None:
+            engines.append(("qwen_reasoning", self._reasoning_qwen))
+
+        for name, eng in engines:
             try:
                 await eng.warmup()
             except Exception as e:
@@ -205,6 +210,16 @@ class DirectProcessor:
             fields.update(layout_fields)
             result["fields"] = fields
 
+            if self._reasoning_qwen is not None and preprocessed:
+                result["reasoning"] = await self._reasoning_qwen.reason(
+                    image_bytes=preprocessed[0],
+                    ocr_text=ocr_raw.get("raw_text", ""),
+                    fields=fields,
+                    detections=all_detections,
+                )
+            else:
+                result["reasoning"] = {"enabled": False}
+
             amount = None
             if fields.get("transaction_amount"):
                 amount = fields["transaction_amount"].get("value")
@@ -290,11 +305,11 @@ class DirectProcessor:
 
             elapsed_ms = int((time.monotonic() - start) * 1000)
             result["processing_time_ms"] = elapsed_ms
-            # ponytail: save to DB after successful processing
-            try:
-                await self._save_to_db(result, file_bytes, filename, doc_type)
-            except Exception as e:
-                logger.warning("db_save_failed", error=str(e))
+            if settings.ENABLE_DATABASE:
+                try:
+                    await self._save_to_db(result, file_bytes, filename, doc_type)
+                except Exception as e:
+                    logger.warning("db_save_failed", error=str(e))
 
         except DocumentError as e:
             result["status"] = statuses.NG
@@ -366,7 +381,7 @@ class DirectProcessor:
             for i, po in enumerate(page_images):
                 await result_repo.save_ocr(job_id, pk, {
                     "page_number": i + 1,
-                    "engine_name": po.get("engine_name", "easyocr"),
+                    "engine_name": po.get("engine_name", settings.OCR_PROVIDER),
                     "raw_text": po.get("raw_text"),
                     "tokens_json": po.get("tokens_json"),
                     "average_confidence": po.get("average_confidence"),
