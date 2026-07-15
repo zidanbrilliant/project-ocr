@@ -165,6 +165,10 @@ class DirectProcessor:
             ocr_raw["raw_text"] = "\n".join(all_texts)
             ocr_raw["tokens_json"] = all_tokens
             ocr_raw["average_confidence"] = round(total_conf_sum / max(total_conf_count, 1), 2)
+            if page_ocrs:
+                ocr_raw["engine_name"] = page_ocrs[0].get("engine_name", "none")
+                if "error" in page_ocrs[0]:
+                    ocr_raw["error"] = page_ocrs[0]["error"]
             result["ocr"] = ocr_raw
             result["_page_ocrs"] = page_ocrs
             result["_page_bcs"] = page_bcs

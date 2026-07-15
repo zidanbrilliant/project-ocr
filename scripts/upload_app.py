@@ -43,9 +43,14 @@ def clear_processing_state():
     init_state()
 
 
-@st.cache_resource(show_spinner=False)
+_processor_instance = None
+
 def get_processor():
-    return DirectProcessor()
+    global _processor_instance
+    if _processor_instance is None:
+        from scripts.direct_processor import DirectProcessor
+        _processor_instance = DirectProcessor()
+    return _processor_instance
 
 
 def draw_bboxes(img: np.ndarray, detections: list[dict], color=(0, 255, 0)) -> np.ndarray:

@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from app.shared.config.settings import settings
+from app.shared.health_registry import register as _register_health
 from app.shared.logging.logger import get_logger
 
 logger = get_logger(__name__)
@@ -19,16 +20,14 @@ class YOLOAdapter:
 
     async def warmup(self) -> None:
         try:
-            import torch
-            _orig = torch.load
-            torch.load = lambda *a, **kw: _orig(*a, **{**kw, 'weights_only': False})
-
             from ultralytics import YOLO
             self._model = YOLO(settings.YOLO_MODEL_PATH)
             self._class_names = self._model.names
+            _register_health("yolo", available=True, model=str(settings.YOLO_MODEL_PATH), device=DEVICE)
             logger.info("yolo_loaded", classes=dict(self._class_names), device=DEVICE)
             self._loaded = True
         except Exception as e:
+            _register_health("yolo", available=False, error=str(e), model=str(settings.YOLO_MODEL_PATH))
             logger.warning("yolo_load_failed", error=str(e))
             self._loaded = False
 

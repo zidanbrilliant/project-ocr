@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from app.infrastructure.ocr.qwen_vl_adapter import QwenVLAdapter
+from app.shared.health_registry import register as _register_health
 from app.shared.logging.logger import get_logger
 
 logger = get_logger(__name__)
@@ -32,10 +33,17 @@ class DocumentOCR:
         # Phase 3: EasyOCR as lightweight fallback
         try:
             import easyocr
-            self._easyocr_reader = easyocr.Reader(["en", "id"], gpu=_HAS_CUDA)
-            logger.info("easyocr_fallback_ready", gpu=_HAS_CUDA)
+            try:
+                self._easyocr_reader = easyocr.Reader(["en", "id"], gpu=_HAS_CUDA)
+                _register_health("easyocr", available=True, gpu=_HAS_CUDA)
+                logger.info("easyocr_fallback_ready", gpu=_HAS_CUDA)
+            except Exception:
+                self._easyocr_reader = easyocr.Reader(["en", "id"], gpu=False)
+                _register_health("easyocr", available=True, gpu=False, note="GPU init failed, using CPU")
+                logger.info("easyocr_fallback_ready", gpu=False, note="GPU init failed, using CPU")
         except ImportError:
             self._easyocr_reader = None
+            _register_health("easyocr", available=False, error="easyocr not installed")
             logger.info("easyocr_not_available")
 
     async def run(self, image_bytes: bytes, extension: str = ".pdf") -> dict[str, Any]:
@@ -51,7 +59,7 @@ class DocumentOCR:
 
         # Phase 2: Qwen2.5-VL (document understanding, best accuracy)
         if self._qwen._available:
-            result = await self._qwen._run_qwen(image_bytes)
+            result = await self._qwen.run(image_bytes)
             if result.get("raw_text", "").strip():
                 result["processing_time_ms"] = int((time.monotonic() - start) * 1000)
                 return result
