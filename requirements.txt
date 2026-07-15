@@ -15,7 +15,7 @@ streamlit>=1.35
 
 zxing-cpp>=2.2
 pyzbar>=0.1
-paddleocr>=3.0.0
+paddleocr[doc-parser]>=3.0.0
 pytest>=8.2
 pytest-asyncio>=0.23
 pytest-cov>=5.0

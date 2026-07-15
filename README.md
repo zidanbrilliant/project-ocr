@@ -6,7 +6,7 @@ AI service for Toyota invoice and delivery-note verification. The testing flow i
 
 ```bash
 cp .env.example .env
-docker compose --profile standalone up --build streamlit
+docker compose --profile standalone up --build streamlit qwen
 ```
 
 Open `http://localhost:8501`, upload a PDF/JPG/PNG, choose `INV` or `DN`, then click `Process`.
@@ -18,6 +18,9 @@ Default testing config:
 - `ENABLE_DATABASE=false`
 - `OCR_PROVIDER=paddleocr_vl`
 - `PADDLEOCR_VL_MODEL_DIR=/mnt/models/PaddleOCR-VL-1.6`
+- `ENABLE_QWEN_REASONING=true`
+- `QWEN_SERVICE_URL=http://qwen:8000`
+- `QWEN_SERVICE_URL=http://qwen:8000`
 
 DGX Spark standalone Docker defaults to PaddleOCR-VL. To switch OCR to Qwen, set:
 

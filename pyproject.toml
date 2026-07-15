@@ -20,7 +20,7 @@ dependencies = [
 
     "zxing-cpp>=2.2",
     "pyzbar>=0.1",
-    "paddleocr>=3.0.0",
+    "paddleocr[doc-parser]>=3.0.0",
 ]
 
 [project.optional-dependencies]

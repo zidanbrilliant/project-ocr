@@ -21,11 +21,14 @@ Failure behaviour
 
 from __future__ import annotations
 
+import base64
 import io
 import importlib.machinery
 import os
 import time
 from typing import Any
+
+import httpx
 
 # vLLM starts CUDA workers in subprocesses. On DGX Spark/Streamlit, CUDA may
 # already be touched by imports, so force spawn instead of fork.
@@ -69,6 +72,7 @@ class QwenVLAdapter:
         self._llm: Any | None = None       # vllm.LLM instance
         self._available: bool = False
         self._load_error: str | None = None
+        self._service_url = settings.QWEN_SERVICE_URL.rstrip("/")
 
     @property
     def is_available(self) -> bool:
@@ -83,6 +87,22 @@ class QwenVLAdapter:
     # ------------------------------------------------------------------
     async def warmup(self) -> None:
         global _llm_instance
+
+        if self._service_url:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"{self._service_url}/health")
+                    response.raise_for_status()
+                self._available = True
+                self._load_error = None
+                _register_health("qwen2.5-vl", available=True, remote=True)
+                logger.info("qwen_vl_remote_ready", service_url=self._service_url)
+            except Exception as exc:
+                self._available = False
+                self._load_error = f"Remote service unavailable: {exc}"
+                _register_health("qwen2.5-vl", available=False, error=self._load_error)
+                logger.warning("qwen_vl_remote_unavailable", error=str(exc), service_url=self._service_url)
+            return
 
         # Re-use already-loaded model (singleton)
         if _llm_instance is not None:
@@ -125,7 +145,7 @@ class QwenVLAdapter:
                 dtype="float16",            # AWQ does not support bfloat16 yet
                 trust_remote_code=True,
                 # Limit GPU memory to leave headroom for YOLO and OCR parsing.
-                gpu_memory_utilization=0.70,
+                gpu_memory_utilization=0.55,
                 max_model_len=4096,
                 download_dir=None,
                 # ponytail: limit concurrent requests for single-image OCR
@@ -157,6 +177,8 @@ class QwenVLAdapter:
     # Public run interface (mirrors old AutoModel adapter)
     # ------------------------------------------------------------------
     async def run(self, image_bytes: bytes, extension: str = ".pdf") -> dict[str, Any]:
+        if self._service_url:
+            return await self._run_remote(image_bytes, extension=extension)
         return await self._run_qwen(image_bytes)
 
     async def reason(
@@ -174,6 +196,8 @@ class QwenVLAdapter:
             f"EXTRACTED_FIELDS:\n{fields}\n\n"
             f"DETECTIONS:\n{detections[:50]}"
         )
+        if self._service_url:
+            return await self._run_remote(image_bytes, prompt_instruction=prompt, engine_name="qwen2.5-vl-reasoning")
         return await self._run_qwen(image_bytes, prompt_instruction=prompt, engine_name="qwen2.5-vl-reasoning")
 
     async def _run_qwen(
@@ -249,6 +273,30 @@ class QwenVLAdapter:
                 "error": "inference_exception",
                 "average_confidence": 0.0,
                 "processing_time_ms": elapsed_ms,
+            }
+
+    async def _run_remote(self, image_bytes: bytes, prompt_instruction: str | None = None, engine_name: str = "qwen2.5-vl") -> dict[str, Any]:
+        start = time.monotonic()
+        try:
+            payload = {
+                "image_b64": base64.b64encode(image_bytes).decode("ascii"),
+                "prompt_instruction": prompt_instruction,
+                "engine_name": engine_name,
+            }
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(f"{self._service_url}/api/v1/qwen/run", json=payload)
+                response.raise_for_status()
+                result = response.json()
+            result["processing_time_ms"] = int((time.monotonic() - start) * 1000)
+            return result
+        except Exception:
+            logger.exception("qwen_vl_remote_inference_failed")
+            return {
+                "engine_name": engine_name,
+                "raw_text": "",
+                "error": "remote_inference_exception",
+                "average_confidence": 0.0,
+                "processing_time_ms": int((time.monotonic() - start) * 1000),
             }
 
 

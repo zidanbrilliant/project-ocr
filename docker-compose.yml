@@ -12,8 +12,45 @@ services:
       RUN_MODE: standalone
       ENABLE_DATABASE: "false"
       ENABLE_RABBITMQ: "false"
-      OCR_PROVIDER: ${OCR_PROVIDER:-paddleocr_vl}
+      OCR_PROVIDER: paddleocr_vl
       PADDLEOCR_VL_MODEL_DIR: ${PADDLEOCR_VL_MODEL_DIR:-/mnt/models/PaddleOCR-VL-1.6}
+      ENABLE_QWEN_REASONING: "true"
+      QWEN_SERVICE_URL: http://qwen:8000
+      YOLO_CONFIG_DIR: /tmp/Ultralytics
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      CC: gcc
+      CXX: g++
+      TRITON_CACHE_DIR: /tmp/triton-cache
+    volumes:
+      - ./models:/app/models:ro
+      - /mnt/models:/mnt/models:ro
+    depends_on:
+      qwen:
+        condition: service_healthy
+    runtime: ${DOCKER_RUNTIME:-nvidia}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  qwen:
+    profiles: ["standalone"]
+    build:
+      context: .
+      target: qwen
+    env_file:
+      - .env
+    environment:
+      RUN_MODE: api
+      SERVICE_NAME: qwen-reasoning
+      ENABLE_DATABASE: "false"
+      ENABLE_RABBITMQ: "false"
+      API_AUTH_MODE: none
+      OCR_PROVIDER: paddleocr_vl
+      QWEN_SERVICE_URL: ""
       VLM_MODEL_PATH: ${VLM_MODEL_PATH:-/mnt/models/Qwen2.5-VL-7B-Instruct-AWQ}
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       VLLM_WORKER_MULTIPROC_METHOD: spawn
@@ -24,6 +61,11 @@ services:
       - ./models:/app/models:ro
       - /mnt/models:/mnt/models:ro
     runtime: ${DOCKER_RUNTIME:-nvidia}
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
     deploy:
       resources:
         reservations:

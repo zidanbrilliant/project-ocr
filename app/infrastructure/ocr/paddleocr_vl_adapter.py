@@ -60,14 +60,9 @@ class PaddleOCRVLAdapter:
         try:
             from paddleocr import PaddleOCRVL  # type: ignore[import]
 
-            kwargs: dict[str, Any] = {}
-            for key in ("model_dir", "model_name_or_path"):
-                try:
-                    pipeline = PaddleOCRVL(**{key: model_dir})
-                    break
-                except TypeError:
-                    continue
-            else:
+            try:
+                pipeline = PaddleOCRVL(vl_rec_model_dir=model_dir)
+            except TypeError:
                 pipeline = PaddleOCRVL(model_dir)
 
             self._pipeline = pipeline
@@ -82,7 +77,7 @@ class PaddleOCRVLAdapter:
                 "paddleocr-vl",
                 available=False,
                 error=self._load_error,
-                hint="Install paddleocr>=3.0.0 in the OCR runtime, then set OCR_PROVIDER=paddleocr_vl",
+                hint="Install paddleocr[doc-parser]>=3.0.0 in the OCR runtime, then set OCR_PROVIDER=paddleocr_vl",
             )
             logger.warning("paddleocr_vl_import_failed", error=str(exc))
         except Exception as exc:

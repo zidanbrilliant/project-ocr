@@ -23,6 +23,31 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS qwen-base
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libreoffice-writer \
+    libgl1 \
+    libglib2.0-0 \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CC=gcc \
+    CXX=g++ \
+    TRITON_CACHE_DIR=/tmp/triton-cache \
+    PYTHONUNBUFFERED=1
+
+RUN mkdir -p "$TRITON_CACHE_DIR"
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+COPY . .
+
 FROM base AS api
 CMD ["uvicorn", "app.interfaces.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
@@ -32,3 +57,6 @@ CMD ["python", "-m", "app.workers.worker_main"]
 FROM base AS streamlit
 EXPOSE 8501
 CMD ["streamlit", "run", "scripts/upload_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+
+FROM qwen-base AS qwen
+CMD ["uvicorn", "app.interfaces.api.qwen_main:app", "--host", "0.0.0.0", "--port", "8000"]

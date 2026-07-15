@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     WORKER_PREFETCH_COUNT: int = 1
     VLM_MODEL_PATH: str = ""
     VLM_MAX_TOKENS: int = 2048
+    QWEN_SERVICE_URL: str = ""
     PADDLEOCR_VL_MODEL_DIR: str = "/mnt/models/PaddleOCR-VL-1.6"
 
     ENABLE_QWEN_REASONING: bool = False
