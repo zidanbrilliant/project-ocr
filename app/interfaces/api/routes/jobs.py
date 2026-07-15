@@ -7,7 +7,6 @@ from app.application.use_cases.get_job_status_use_case import GetJobStatusUseCas
 from app.application.use_cases.reprocess_job_use_case import ReprocessJobUseCase
 from app.infrastructure.database.repositories.ai_job_postgres_repository import AIJobPostgresRepository
 from app.infrastructure.database.repositories.result_postgres_repository import ResultPostgresRepository
-from app.infrastructure.rabbitmq.connection import RabbitMQConnection
 from app.interfaces.api.dependencies import (
     get_job_repo,
     get_result_repo,

@@ -13,12 +13,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
     volumes:
       - ./models:/app/models:ro
 
   ai-worker:
+    profiles: ["prod"]
     build:
       context: .
       target: worker
@@ -44,6 +43,7 @@ services:
               capabilities: [gpu]
 
   rabbitmq:
+    profiles: ["prod"]
     image: rabbitmq:3-management
     ports:
       - "5672:5672"
