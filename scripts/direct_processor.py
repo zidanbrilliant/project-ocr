@@ -1,17 +1,13 @@
 import asyncio
-import io
 import time
-import uuid
 from datetime import datetime
 from typing import Any
 
 import numpy as np
 
 from app.domain.entities.ai_job import AIJob as AIJobEntity
-from app.domain.entities.business_validation_result import BusinessValidationResult
 from app.domain.entities.final_result import FinalResult
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
-from app.domain.services.confidence_policy import ConfidencePolicy
 from app.domain.services.remark_policy import RemarkPolicy
 from app.domain.value_objects.confidence_score import ConfidenceScore
 from app.infrastructure.barcode.barcode_fallback_chain import BarcodeFallbackChain
@@ -35,7 +31,6 @@ from app.application.services.confidence_scoring_service import ConfidenceScorin
 from app.infrastructure.database.session import async_session_factory
 from app.infrastructure.database.repositories.ai_job_postgres_repository import AIJobPostgresRepository
 from app.infrastructure.database.repositories.result_postgres_repository import ResultPostgresRepository
-from app.infrastructure.database.repositories.audit_log_postgres_repository import AuditLogPostgresRepository
 
 
 logger = get_logger(__name__)
@@ -69,8 +64,6 @@ class DirectProcessor:
             ZXingAdapter(), PyzbarAdapter(), OpenCVBarcodeAdapter()
         )
 
-        self._models_loaded = False
-
     async def warmup(self) -> None:
         logger.info("processor_warmup_start")
         engines = [("document_ocr", self._ocr), ("yolo", self._yolo)]
@@ -84,8 +77,6 @@ class DirectProcessor:
                 if name == "document_ocr":
                     raise
                 logger.warning(f"{name}_warmup_failed", error=str(e))
-        self._models_loaded = True
-        self._warmed_up = True
         logger.info("processor_warmup_done")
 
     async def process(self, file_bytes: bytes, filename: str, doc_type: str = "INV") -> dict[str, Any]:
@@ -195,7 +186,6 @@ class DirectProcessor:
 
             all_detections: list[dict[str, Any]] = []
             if preprocessed:
-                import sys
                 all_detections = await self._yolo.detect_batch(preprocessed)
             else:
                 all_detections = []
@@ -351,7 +341,6 @@ class DirectProcessor:
 
     async def _save_to_db(self, result: dict[str, Any], file_bytes: bytes, filename: str, doc_type: str) -> None:
         import uuid as uuid_mod
-        from app.shared.utils.id_generator import generate_queue_id, generate_job_id
         from app.shared.utils.hash import build_idempotency_key
 
         job_id = uuid_mod.uuid4()

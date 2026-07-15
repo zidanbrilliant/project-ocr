@@ -82,7 +82,7 @@ class PaddleOCRVLAdapter:
                 "paddleocr-vl",
                 available=False,
                 error=self._load_error,
-                hint="Install PaddleOCR in the OCR runtime, then set OCR_PROVIDER=paddleocr_vl",
+                hint="Install paddleocr>=3.0.0 in the OCR runtime, then set OCR_PROVIDER=paddleocr_vl",
             )
             logger.warning("paddleocr_vl_import_failed", error=str(exc))
         except Exception as exc:

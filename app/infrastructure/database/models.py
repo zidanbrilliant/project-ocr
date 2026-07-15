@@ -6,9 +6,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Date,
-    Double,
     ForeignKey,
-    Index,
     Integer,
     Numeric,
     String,
@@ -88,13 +86,6 @@ class AIJob(Base):
     error_logs = relationship("AIErrorLog", back_populates="job", cascade="all, delete-orphan")
     audit_logs = relationship("AIAuditLog", back_populates="job", cascade="all, delete-orphan")
     retry_logs = relationship("AIRetryLog", back_populates="job", cascade="all, delete-orphan")
-    # --- new relationships ---
-    pages = relationship("AIPage", back_populates="job", cascade="all, delete-orphan")
-    extracted_fields = relationship("AIExtractedField", back_populates="job", cascade="all, delete-orphan")
-    validation_results = relationship("AIValidationResult", back_populates="job", cascade="all, delete-orphan")
-    cross_doc_validations = relationship("AICrossDocumentValidationResult", back_populates="job", cascade="all, delete-orphan")
-    model_runs = relationship("AIModelRun", back_populates="job", cascade="all, delete-orphan")
-    artifacts = relationship("AIArtifact", back_populates="job", cascade="all, delete-orphan")
     outbox_events = relationship("AIOutboxEvent", back_populates="job", cascade="all, delete-orphan")
 
 
@@ -139,11 +130,6 @@ class AIDocument(Base):
     duplicate_check_results = relationship("AIDuplicateCheckResult", back_populates="document", cascade="all, delete-orphan")
     business_validation_results = relationship("AIBusinessValidationResult", back_populates="document", cascade="all, delete-orphan")
     summary = relationship("AIDocumentSummary", back_populates="document", uselist=False, cascade="all, delete-orphan")
-    # --- new relationships ---
-    pages = relationship("AIPage", back_populates="document", cascade="all, delete-orphan")
-    extracted_fields = relationship("AIExtractedField", back_populates="document", cascade="all, delete-orphan")
-    validation_results = relationship("AIValidationResult", back_populates="document", cascade="all, delete-orphan")
-    artifacts = relationship("AIArtifact", back_populates="document", cascade="all, delete-orphan")
 
 
 class AIOCRResult(Base):
@@ -316,20 +302,6 @@ class AIErrorLog(Base):
     document = relationship("AIDocument")
 
 
-class AIModelVersion(Base):
-    __tablename__ = "ai_model_versions"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    model_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    model_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    model_version: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    trained_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
-    model_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    config_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True, default=True)
-    created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
-
-
 class AIAuditLog(Base):
     __tablename__ = "ai_audit_logs"
 
@@ -360,178 +332,6 @@ class AIRetryLog(Base):
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
 
     job = relationship("AIJob", back_populates="retry_logs")
-
-
-class AIPage(Base):
-    __tablename__ = "ai_pages"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_jobs.id"), nullable=False, index=True)
-    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_documents.id"), nullable=False, index=True)
-    page_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    processing_status: Mapped[str] = mapped_column(String(30), nullable=False, default="PENDING", index=True)
-    processing_result: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    dpi: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    rotation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    page_width_pt: Mapped[float | None] = mapped_column(Double, nullable=True)
-    page_height_pt: Mapped[float | None] = mapped_column(Double, nullable=True)
-    text_layer_detected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    readable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    quality_result: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    quality_metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    timings_ms: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    artifact_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-
-    __table_args__ = (
-        UniqueConstraint("document_id", "page_index", name="uq_page_index"),
-        UniqueConstraint("document_id", "page_number", name="uq_page_number"),
-        CheckConstraint("page_index >= 0", name="ck_page_idx"),
-        CheckConstraint("page_number >= 1", name="ck_page_num"),
-    )
-
-    job = relationship("AIJob", back_populates="pages")
-    document = relationship("AIDocument", back_populates="pages")
-
-
-class AIExtractedField(Base):
-    __tablename__ = "ai_extracted_fields"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_jobs.id"), nullable=False, index=True)
-    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_documents.id"), nullable=False, index=True)
-    page_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_pages.id"), nullable=True, index=True)
-    field_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    field_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    raw_value: Mapped[str | None] = mapped_column(Text, nullable=True)
-    normalized_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    data_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    confidence: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
-    extraction_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    extraction_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    source_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source_page_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    source_page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    bounding_box: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    validation_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    __table_args__ = (
-        Index("ix_extracted_field_doc_code", "document_id", "field_code"),
-    )
-
-    job = relationship("AIJob", back_populates="extracted_fields")
-    document = relationship("AIDocument", back_populates="extracted_fields")
-
-
-class AIValidationResult(Base):
-    __tablename__ = "ai_validation_results"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_jobs.id"), nullable=False, index=True)
-    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_documents.id"), nullable=True, index=True)
-    page_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_pages.id"), nullable=True, index=True)
-    rule_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    rule_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    rule_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    rule_category: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
-    item_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="ERROR")
-    is_mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    result: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    confidence: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
-    expected_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    actual_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    reason_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
-
-    job = relationship("AIJob", back_populates="validation_results")
-    document = relationship("AIDocument", back_populates="validation_results")
-
-
-class AICrossDocumentValidationResult(Base):
-    __tablename__ = "ai_cross_document_validation_results"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_jobs.id"), nullable=False, index=True)
-    check_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    check_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    check_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    result: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="ERROR")
-    is_mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    document_ids: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    expected_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    actual_values: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    reason_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
-
-    job = relationship("AIJob", back_populates="cross_doc_validations")
-
-
-class AIModelRun(Base):
-    __tablename__ = "ai_model_runs"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_jobs.id"), nullable=False, index=True)
-    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_documents.id"), nullable=True, index=True)
-    page_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_pages.id"), nullable=True, index=True)
-    model_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_model_versions.id"), nullable=True)
-    model_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    engine: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    model_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    model_version: Mapped[str] = mapped_column(String(100), nullable=False)
-    framework: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    device: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    input_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    batch_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    confidence_threshold: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
-    nms_threshold: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
-    queue_wait_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    inference_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    execution_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    configuration: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
-
-    job = relationship("AIJob", back_populates="model_runs")
-
-
-class AIArtifact(Base):
-    __tablename__ = "ai_artifacts"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_jobs.id"), nullable=False, index=True)
-    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_documents.id"), nullable=True, index=True)
-    page_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ai_pages.id"), nullable=True, index=True)
-    artifact_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    storage_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    storage_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
-    content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    checksum_sha256: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    retention_until: Mapped[datetime | None] = mapped_column(nullable=True)
-    artifact_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
-
-    job = relationship("AIJob", back_populates="artifacts")
-    document = relationship("AIDocument", back_populates="artifacts")
 
 
 class AIInboxMessage(Base):

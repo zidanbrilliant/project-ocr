@@ -9,7 +9,6 @@ from aio_pika.abc import AbstractIncomingMessage
 from app.application.dto.request_normalizer import normalize_request
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
-from app.domain.entities.business_validation_result import BusinessValidationResult, FailedRule
 from app.domain.entities.final_result import FinalResult
 from app.domain.entities.normalized_request import (
     DocumentProcessingResult,
@@ -18,7 +17,6 @@ from app.domain.entities.normalized_request import (
     PageProcessingResult,
 )
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
-from app.domain.services.remark_policy import RemarkPolicy
 from app.infrastructure.barcode.barcode_fallback_chain import BarcodeFallbackChain
 from app.infrastructure.database.repositories.ai_job_postgres_repository import AIJobPostgresRepository
 from app.infrastructure.database.repositories.audit_log_postgres_repository import AuditLogPostgresRepository
@@ -33,11 +31,10 @@ from app.infrastructure.ocr.document_ocr import DocumentOCR
 from app.infrastructure.rabbitmq.publisher import ResultPublisher
 from app.infrastructure.rabbitmq.retry import RetryHandler
 from app.infrastructure.storage.image_server_client import ImageServerClient
-from app.infrastructure.storage.temp_file_manager import TempFileManager
 from app.shared.config.settings import settings
 from app.shared.constants import return_codes, statuses
-from app.shared.constants.doc_types import DN, MAIN_DOCUMENT
-from app.shared.exceptions.base import DocumentError, InternalProcessingError
+from app.shared.constants.doc_types import DN
+from app.shared.exceptions.base import DocumentError
 from app.shared.logging.log_context import log_context
 from app.shared.logging.logger import get_logger
 
@@ -66,7 +63,6 @@ class AIPipelineOrchestrator:
         publisher: ResultPublisher,
         retry_handler: RetryHandler,
         file_client: ImageServerClient,
-        temp_mgr: TempFileManager,
         pdf_renderer: PDFRenderer,
         word_converter: WordConverter,
         preprocessor: ImagePreprocessor,
@@ -77,7 +73,6 @@ class AIPipelineOrchestrator:
         field_extractor: FieldExtractionService,
         rule_evaluator: BusinessRuleEvaluator,
         confidence_scorer: ConfidenceScoringService,
-        remark_policy: RemarkPolicy,
     ) -> None:
         self._job_repo = job_repo
         self._result_repo = result_repo
@@ -85,7 +80,6 @@ class AIPipelineOrchestrator:
         self._publisher = publisher
         self._retry = retry_handler
         self._file_client = file_client
-        self._temp_mgr = temp_mgr
         self._pdf_renderer = pdf_renderer
         self._word_converter = word_converter
         self._preprocessor = preprocessor
@@ -96,7 +90,6 @@ class AIPipelineOrchestrator:
         self._field_extractor = field_extractor
         self._rule_evaluator = rule_evaluator
         self._confidence_scorer = confidence_scorer
-        self._remark_policy = remark_policy
 
     async def process(self, payload: dict[str, Any], msg: AbstractIncomingMessage) -> None:
         normalized = normalize_request(payload)
@@ -128,7 +121,7 @@ class AIPipelineOrchestrator:
         for coro in asyncio.as_completed(tasks):
             try:
                 doc_results.append(await coro)
-            except Exception as e:
+            except Exception:
                 logger.exception("document_task_failed")
                 doc_results.append(DocumentProcessingResult(
                     document_index=-1, external_document_id="unknown",
@@ -142,7 +135,11 @@ class AIPipelineOrchestrator:
         # Aggregate job results
         ok_count = sum(1 for d in doc_results if d.document_result == statuses.OK)
         ng_count = sum(1 for d in doc_results if d.document_result == statuses.NG)
-        error_count = sum(1 for d in doc_results if d.processing_result in (statuses.INTERNAL_ERROR, statuses.DOCUMENT_ERROR))
+        error_count = sum(
+            1
+            for d in doc_results
+            if d.processing_result in (statuses.INTERNAL_ERROR, statuses.DOCUMENT_ERROR)
+        )
         overall = statuses.OK if ok_count == len(doc_results) and error_count == 0 else statuses.NG
 
         finish_dt = datetime.utcnow()
@@ -191,9 +188,21 @@ class AIPipelineOrchestrator:
             overall_result=overall, processing_status=statuses.COMPLETED,
             ai_confidence=None, ai_confidence_level=None, ai_note=f"Processed {len(doc_results)} documents",
             ai_return_status=overall, ai_return_cd=result_payload["AI_RETURN_CD"],
-            ai_return_remark=f"{ok_count} OK, {ng_count} NG, {error_count} errors" if error_count else "All documents processed",
+            ai_return_remark=(
+                f"{ok_count} OK, {ng_count} NG, {error_count} errors"
+                if error_count
+                else "All documents processed"
+            ),
             ai_return_confidence=None,
-            internal_result_json={"documents": result_payload["documents"], "summary": {"total": len(doc_results), "ok": ok_count, "ng": ng_count, "errors": error_count}},
+            internal_result_json={
+                "documents": result_payload["documents"],
+                "summary": {
+                    "total": len(doc_results),
+                    "ok": ok_count,
+                    "ng": ng_count,
+                    "errors": error_count,
+                },
+            },
             processing_time_ms=duration_ms, published_at=finish_dt,
         )
         await self._result_repo.save_final(final_result)
@@ -272,7 +281,11 @@ class AIPipelineOrchestrator:
                         processing_result=statuses.INTERNAL_ERROR,
                         errors=[{"stage": "PAGE", "error": str(pr)}],
                     ))
-                    ocr_results.append({"engine_name": settings.OCR_PROVIDER, "raw_text": "", "average_confidence": 0.0})
+                    ocr_results.append({
+                        "engine_name": settings.OCR_PROVIDER,
+                        "raw_text": "",
+                        "average_confidence": 0.0,
+                    })
                     barcode_results.append({"barcode_found": False, "barcode_decoded": False})
                 else:
                     ocr_res, bc_res = pr
@@ -286,7 +299,9 @@ class AIPipelineOrchestrator:
                         ocr_raw_text=ocr_res.get("raw_text"),
                         ocr_engine=ocr_res.get("engine_name", settings.OCR_PROVIDER),
                         ocr_confidence=ocr_res.get("average_confidence"),
-                        detections=[d for d in raw_detections if d.get("page_number", 1) == i + 1],
+                        detections=[
+                            d for d in raw_detections if d.get("page_number", 1) == i + 1
+                        ],
                         barcodes=[bc_res],
                         errors=[{"stage": "OCR", "error": ocr_err}] if ocr_err else [],
                     ))
@@ -297,9 +312,16 @@ class AIPipelineOrchestrator:
             all_text = "\n".join(r.get("raw_text", "") or "" for r in ocr_results if r.get("raw_text"))
             ocr_errors = [err for err in (_ocr_error(r) for r in ocr_results) if err]
             ocr_aggregated = {
-                "engine_name": ocr_results[0].get("engine_name", settings.OCR_PROVIDER) if ocr_results else settings.OCR_PROVIDER,
+                "engine_name": (
+                    ocr_results[0].get("engine_name", settings.OCR_PROVIDER)
+                    if ocr_results
+                    else settings.OCR_PROVIDER
+                ),
                 "raw_text": all_text,
-                "average_confidence": sum(r.get("average_confidence", 0) or 0 for r in ocr_results) / max(len(ocr_results), 1),
+                "average_confidence": (
+                    sum(r.get("average_confidence", 0) or 0 for r in ocr_results)
+                    / max(len(ocr_results), 1)
+                ),
             }
             if ocr_errors:
                 ocr_aggregated["error"] = ocr_errors[0]
@@ -313,12 +335,20 @@ class AIPipelineOrchestrator:
             ocr_entity.raw_text = ocr_aggregated.get("raw_text")
             ocr_entity.average_confidence = ocr_aggregated.get("average_confidence")
             ocr_entity.invoice_number = fields.get("document_number", {}).get("value")
-            ocr_entity.transaction_amount = fields.get("transaction_amount", {}).get("value") if fields.get("transaction_amount") else None
+            ocr_entity.transaction_amount = (
+                fields.get("transaction_amount", {}).get("value")
+                if fields.get("transaction_amount")
+                else None
+            )
 
             det_entities = [map_to_entity(d) for d in raw_detections]
             aggregated = aggregate_per_object_type(det_entities)
 
-            amount = fields.get("transaction_amount", {}).get("value") if fields.get("transaction_amount") else None
+            amount = (
+                fields.get("transaction_amount", {}).get("value")
+                if fields.get("transaction_amount")
+                else None
+            )
 
             if doc.document_type == DN:
                 validation = self._rule_evaluator.validate_delivery_note(detections=list(aggregated.values()))
@@ -332,7 +362,8 @@ class AIPipelineOrchestrator:
             bc_final = {"barcode_found": False, "barcode_decoded": False}
             for bc in barcode_results:
                 if bc.get("barcode_decoded"):
-                    bc_final = bc; break
+                    bc_final = bc
+                    break
                 if bc.get("barcode_found") and not bc_final.get("barcode_found"):
                     bc_final = bc
             result.barcode_result = bc_final

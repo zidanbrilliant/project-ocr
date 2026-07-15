@@ -1,4 +1,3 @@
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -114,7 +113,6 @@ def normalize_pipeline_result_for_ui(
         "document": {
             **document_info,
             "page_count": page_count,
-            "page_count_raw": page_count,
         },
         "pages": ui_pages,
         "errors": [raw_result["error"]] if raw_result.get("error") else [],

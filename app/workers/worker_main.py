@@ -5,7 +5,6 @@ from app.application.services.ai_pipeline_orchestrator import AIPipelineOrchestr
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
-from app.domain.services.remark_policy import RemarkPolicy
 from app.infrastructure.barcode.barcode_fallback_chain import BarcodeFallbackChain
 from app.infrastructure.barcode.opencv_barcode_adapter import OpenCVBarcodeAdapter
 from app.infrastructure.barcode.pyzbar_adapter import PyzbarAdapter
@@ -27,7 +26,6 @@ from app.infrastructure.rabbitmq.publisher import ResultPublisher
 from app.infrastructure.rabbitmq.retry import RetryHandler
 from app.infrastructure.rabbitmq.topology import declare_topology
 from app.infrastructure.storage.image_server_client import ImageServerClient
-from app.infrastructure.storage.temp_file_manager import TempFileManager
 from app.shared.config.settings import settings
 from app.shared.logging.log_context import clear_context
 from app.shared.logging.logger import get_logger, setup_logging
@@ -54,7 +52,6 @@ class WorkerMain:
         logger.info("worker_starting", env=settings.APP_ENV)
 
         self._file_client = ImageServerClient()
-        temp_mgr = TempFileManager()
         pdf_renderer = PDFRenderer()
         word_converter = WordConverter()
         preprocessor = ImagePreprocessor()
@@ -62,7 +59,6 @@ class WorkerMain:
         field_extractor = FieldExtractionService()
         rule_eval = BusinessRuleEvaluator()
         conf_scorer = ConfidenceScoringService()
-        remark = RemarkPolicy()
 
         ocr_engine = DocumentOCR()
         await ocr_engine.warmup()
@@ -85,12 +81,12 @@ class WorkerMain:
             orchestrator = AIPipelineOrchestrator(
                 job_repo=job_repo, result_repo=result_repo, audit=audit,
                 publisher=publisher, retry_handler=retry,
-                file_client=self._file_client, temp_mgr=temp_mgr,
+                file_client=self._file_client,
                 pdf_renderer=pdf_renderer, word_converter=word_converter,
                 preprocessor=preprocessor, ocr_engine=ocr_engine,
                 yolo=yolo, barcode_chain=barcode_chain, validator=validator,
                 field_extractor=field_extractor, rule_evaluator=rule_eval,
-                confidence_scorer=conf_scorer, remark_policy=remark,
+                confidence_scorer=conf_scorer,
             )
 
             await declare_topology(self._rmq)

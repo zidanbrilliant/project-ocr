@@ -46,9 +46,7 @@ class Settings(BaseSettings):
     YOLO_CONFIDENCE_THRESHOLD: float = 0.40
     YOLO_NMS_THRESHOLD: float = 0.45
 
-    OCR_ENGINE: str = "document_ocr"
-    OCR_PROVIDER: Literal["qwen", "paddleocr_vl"] = "qwen"
-    OCR_USE_GPU: bool = True
+    OCR_PROVIDER: Literal["qwen", "paddleocr_vl"] = "paddleocr_vl"
     OCR_ENABLE_PDF_TEXT_EXTRACTION: bool = True
 
     CONFIDENCE_THRESHOLD: int = 80
@@ -68,15 +66,11 @@ class Settings(BaseSettings):
     RETRY_BACKOFF_MULTIPLIER: int = 2
 
     WORKER_PREFETCH_COUNT: int = 1
-    GPU_DEVICE_ID: int = 0
-
     VLM_MODEL_PATH: str = ""
     VLM_MAX_TOKENS: int = 2048
     PADDLEOCR_VL_MODEL_DIR: str = "/mnt/models/PaddleOCR-VL-1.6"
 
     ENABLE_QWEN_REASONING: bool = False
-    QWEN_REASONING_MODEL_PATH: str = ""
-    QWEN_REASONING_MAX_TOKENS: int = 1024
 
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"
     INTERNAL_API_KEY: str = ""
@@ -103,21 +97,4 @@ class Settings(BaseSettings):
     OUTBOX_LOCK_TIMEOUT_SECONDS: int = 60
 
     # --- result ---
-    RESULT_SCHEMA_VERSION: str = "1.1"
-
-    # --- retention ---
-    FINAL_RESULT_RETENTION_DAYS: int = 365
-    OCR_RESULT_RETENTION_DAYS: int = 90
-    DETECTION_RESULT_RETENTION_DAYS: int = 90
-    ERROR_LOG_RETENTION_DAYS: int = 90
-    AUDIT_LOG_RETENTION_DAYS: int = 365
-    OUTBOX_PUBLISHED_RETENTION_DAYS: int = 30
-    ARTIFACT_RETENTION_DAYS: int = 30
-    DEBUG_ARTIFACT_RETENTION_DAYS: int = 7
-
-    # --- debug ---
-    KEEP_DEBUG_ARTIFACTS: bool = False
-    TEMP_ROOT_DIR: str = "/tmp/vision-ai"
-
-
 settings = Settings()

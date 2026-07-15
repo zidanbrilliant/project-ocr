@@ -16,19 +16,19 @@ Default testing config:
 - `RUN_MODE=standalone`
 - `ENABLE_RABBITMQ=false`
 - `ENABLE_DATABASE=false`
-- `OCR_PROVIDER=qwen`
-- `VLM_MODEL_PATH=/mnt/models/Qwen2.5-VL-7B-Instruct-AWQ`
+- `OCR_PROVIDER=paddleocr_vl`
 - `PADDLEOCR_VL_MODEL_DIR=/mnt/models/PaddleOCR-VL-1.6`
 
-DGX Spark standalone Docker runs as `aarch64`, so Qwen is the default OCR provider for this image. To test PaddleOCR-VL, use a compatible Paddle runtime and set:
+DGX Spark standalone Docker defaults to PaddleOCR-VL. To switch OCR to Qwen, set:
+
+```env
+OCR_PROVIDER=qwen
+```
+
+To keep PaddleOCR-VL as OCR and still enable optional Qwen reasoning after OCR/YOLO:
 
 ```env
 OCR_PROVIDER=paddleocr_vl
-```
-
-To enable optional Qwen reasoning after OCR/YOLO:
-
-```env
 ENABLE_QWEN_REASONING=true
 ```
 
@@ -43,8 +43,8 @@ RabbitMQ -> request normalizer -> AI pipeline orchestrator -> PostgreSQL result/
 ## Main Adapters
 
 - OCR: `DocumentOCR` with explicit provider `paddleocr_vl` or `qwen`
-- PaddleOCR-VL: local model directory adapter
-- Qwen2.5-VL: vLLM adapter for OCR or optional reasoning
+- PaddleOCR-VL: default standalone OCR adapter
+- Qwen2.5-VL: optional reasoning adapter
 - Detection: Ultralytics YOLO
 - Barcode: zxing-cpp, pyzbar, OpenCV fallback chain
 - UI: Streamlit direct upload

@@ -3,7 +3,6 @@ from typing import Any
 from app.domain.entities.detection_result import DetectionResult
 from app.domain.entities.ocr_result import OCRResult as OCREntity
 from app.domain.services.confidence_policy import ConfidencePolicy
-from app.domain.value_objects.confidence_score import ConfidenceScore
 from app.infrastructure.document_converter.image_preprocessor import ImagePreprocessor
 from app.shared.config.settings import settings
 from app.shared.logging.logger import get_logger
@@ -50,17 +49,6 @@ class ConfidenceScoringService:
             barcode_required=barcode_required,
         )
         return round(total, 2)
-
-    def should_be_null(self, error_type: str | None) -> bool:
-        return error_type in ("DOCUMENT_ERROR", "INTERNAL_ERROR", "DLQ_ERROR")
-
-    def confidence_to_int(self, value: float | None) -> int | None:
-        if value is None:
-            return None
-        return round(value)
-
-    def confidence_level(self, value: float | None) -> str | None:
-        return ConfidenceScore.level(value)
 
     def _compute_quality(self, document_info: dict[str, Any], image_bytes: bytes | None) -> float:
         if image_bytes:
