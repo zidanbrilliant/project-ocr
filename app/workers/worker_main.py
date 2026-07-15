@@ -65,10 +65,7 @@ class WorkerMain:
         remark = RemarkPolicy()
 
         ocr_engine = DocumentOCR()
-        try:
-            await ocr_engine.warmup()
-        except Exception as e:
-            logger.warning("ocr_warmup_failed", error=str(e))
+        await ocr_engine.warmup()
 
         yolo = YOLOAdapter()
         try:

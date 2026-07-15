@@ -70,6 +70,14 @@ class QwenVLAdapter:
         self._available: bool = False
         self._load_error: str | None = None
 
+    @property
+    def is_available(self) -> bool:
+        return self._available
+
+    @property
+    def load_error(self) -> str | None:
+        return self._load_error
+
     # ------------------------------------------------------------------
     # warmup — called once at worker startup
     # ------------------------------------------------------------------

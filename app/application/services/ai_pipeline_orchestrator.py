@@ -44,6 +44,19 @@ from app.shared.logging.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _page_ocr_extension(document_extension: str) -> str:
+    if document_extension in {".pdf", ".doc", ".docx"}:
+        return ".png"
+    return document_extension
+
+
+def _ocr_error(ocr_result: dict[str, Any]) -> str | None:
+    error = ocr_result.get("error")
+    if isinstance(error, str) and error.strip():
+        return error
+    return None
+
+
 class AIPipelineOrchestrator:
     def __init__(
         self,
@@ -240,7 +253,7 @@ class AIPipelineOrchestrator:
 
             async def process_one_page(pp_img: bytes, idx: int) -> tuple[dict, dict]:
                 async with page_sem:
-                    ocr = await self._ocr_engine.run(pp_img, extension=ext)
+                    ocr = await self._ocr_engine.run(pp_img, extension=_page_ocr_extension(ext))
                     bc = await self._barcode_chain.read(pp_img)
                     return ocr, bc
 
@@ -265,26 +278,31 @@ class AIPipelineOrchestrator:
                     ocr_res, bc_res = pr
                     ocr_results.append(ocr_res)
                     barcode_results.append(bc_res)
+                    ocr_err = _ocr_error(ocr_res)
                     page_results_list.append(PageProcessingResult(
                         page_index=i, page_number=i + 1,
-                        processing_status=statuses.COMPLETED,
-                        processing_result=statuses.SUCCESS,
+                        processing_status=statuses.FAILED if ocr_err else statuses.COMPLETED,
+                        processing_result=statuses.INTERNAL_ERROR if ocr_err else statuses.SUCCESS,
                         ocr_raw_text=ocr_res.get("raw_text"),
                         ocr_engine=ocr_res.get("engine_name", settings.OCR_PROVIDER),
                         ocr_confidence=ocr_res.get("average_confidence"),
                         detections=[d for d in raw_detections if d.get("page_number", 1) == i + 1],
                         barcodes=[bc_res],
+                        errors=[{"stage": "OCR", "error": ocr_err}] if ocr_err else [],
                     ))
 
             result.pages = page_results_list
 
             # Aggregate OCR for field extraction
             all_text = "\n".join(r.get("raw_text", "") or "" for r in ocr_results if r.get("raw_text"))
+            ocr_errors = [err for err in (_ocr_error(r) for r in ocr_results) if err]
             ocr_aggregated = {
                 "engine_name": ocr_results[0].get("engine_name", settings.OCR_PROVIDER) if ocr_results else settings.OCR_PROVIDER,
                 "raw_text": all_text,
                 "average_confidence": sum(r.get("average_confidence", 0) or 0 for r in ocr_results) / max(len(ocr_results), 1),
             }
+            if ocr_errors:
+                ocr_aggregated["error"] = ocr_errors[0]
 
             # Extract fields
             fields = ocr_aggregated.get("fields_json") or self._field_extractor.extract_from_ocr(ocr_aggregated)
@@ -330,8 +348,10 @@ class AIPipelineOrchestrator:
             doc_result = statuses.OK if passed else statuses.NG
             result.document_result = doc_result
             result.confidence = total_conf
-            result.processing_status = statuses.COMPLETED
-            result.processing_result = statuses.SUCCESS
+            result.processing_status = statuses.FAILED if ocr_errors else statuses.COMPLETED
+            result.processing_result = statuses.INTERNAL_ERROR if ocr_errors else statuses.SUCCESS
+            if ocr_errors:
+                result.errors.append({"stage": "OCR", "error": ocr_errors[0]})
 
         except DocumentError as e:
             result.processing_status = statuses.FAILED

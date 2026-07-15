@@ -30,20 +30,38 @@ class DocumentOCR:
         self._paddle = PaddleOCRVLAdapter()
         self._provider = settings.OCR_PROVIDER
 
+    def _selected_adapter(self) -> QwenVLAdapter | PaddleOCRVLAdapter | None:
+        if self._provider == "qwen":
+            return self._qwen
+        if self._provider == "paddleocr_vl":
+            return self._paddle
+        return None
+
+    def _provider_error(self) -> str:
+        adapter = self._selected_adapter()
+        if adapter is None:
+            return f"unsupported_ocr_provider:{self._provider}"
+        return adapter.load_error or "model_not_loaded"
+
     async def warmup(self) -> None:
         os.environ.setdefault("PYTHONIOENCODING", "utf-8")
         _register_health("document_ocr", available=True, provider=self._provider)
 
         if self._provider == "qwen":
             await self._qwen.warmup()
-            return
+            if self._qwen.is_available:
+                return
+            raise RuntimeError(self._provider_error())
 
         if self._provider == "paddleocr_vl":
             await self._paddle.warmup()
-            return
+            if self._paddle.is_available:
+                return
+            raise RuntimeError(self._provider_error())
 
         _register_health("document_ocr", available=False, error=f"Unsupported OCR_PROVIDER={self._provider}")
         logger.warning("unsupported_ocr_provider", provider=self._provider)
+        raise RuntimeError(self._provider_error())
 
     async def run(self, image_bytes: bytes, extension: str = ".pdf") -> dict[str, Any]:
         start = time.monotonic()
@@ -58,6 +76,8 @@ class DocumentOCR:
         if self._provider == "qwen":
             result = await self._qwen.run(image_bytes)
             result["processing_time_ms"] = int((time.monotonic() - start) * 1000)
+            if result.get("error") == "model_not_loaded":
+                result["error"] = self._provider_error()
             return result
 
         if self._provider == "paddleocr_vl":

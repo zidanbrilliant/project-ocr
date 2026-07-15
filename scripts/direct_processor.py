@@ -41,6 +41,13 @@ from app.infrastructure.database.repositories.audit_log_postgres_repository impo
 logger = get_logger(__name__)
 
 
+def _ocr_error(ocr_result: dict[str, Any]) -> str | None:
+    error = ocr_result.get("error")
+    if isinstance(error, str) and error.strip():
+        return error
+    return None
+
+
 class DirectProcessor:
     def __init__(self) -> None:
         setup_logging()
@@ -74,6 +81,8 @@ class DirectProcessor:
             try:
                 await eng.warmup()
             except Exception as e:
+                if name == "document_ocr":
+                    raise
                 logger.warning(f"{name}_warmup_failed", error=str(e))
         self._models_loaded = True
         self._warmed_up = True
@@ -105,7 +114,7 @@ class DirectProcessor:
 
             ext = doc_info.get("extension", "")
             page_images: list[bytes] = []
-            ocr_ext = ext
+            ocr_ext = ".png" if ext == ".pdf" else ext
             ocr_raw: dict[str, Any] = {}
             if ext == ".pdf":
                 pdf_text = await self._ocr.run(file_bytes, extension=".pdf")
@@ -170,10 +179,11 @@ class DirectProcessor:
             ocr_raw["raw_text"] = "\n".join(all_texts)
             ocr_raw["tokens_json"] = all_tokens
             ocr_raw["average_confidence"] = round(total_conf_sum / max(total_conf_count, 1), 2)
+            ocr_errors = [err for err in (_ocr_error(page_ocr) for page_ocr in page_ocrs) if err]
             if page_ocrs:
                 ocr_raw["engine_name"] = page_ocrs[0].get("engine_name", "none")
-                if "error" in page_ocrs[0]:
-                    ocr_raw["error"] = page_ocrs[0]["error"]
+            if ocr_errors:
+                ocr_raw["error"] = ocr_errors[0]
             result["ocr"] = ocr_raw
             result["_page_ocrs"] = page_ocrs
             result["_page_bcs"] = page_bcs
@@ -301,6 +311,9 @@ class DirectProcessor:
 
             result["remarks"] = remark
             result["status"] = overall
+            if ocr_errors:
+                result["status"] = statuses.NG
+                result["error"] = ocr_errors[0]
             result["quality_scores"] = quality
 
             elapsed_ms = int((time.monotonic() - start) * 1000)

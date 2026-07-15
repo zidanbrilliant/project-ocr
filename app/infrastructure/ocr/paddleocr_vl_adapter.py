@@ -28,6 +28,14 @@ class PaddleOCRVLAdapter:
         self._available = False
         self._load_error: str | None = None
 
+    @property
+    def is_available(self) -> bool:
+        return self._available
+
+    @property
+    def load_error(self) -> str | None:
+        return self._load_error
+
     async def warmup(self) -> None:
         global _pipeline_instance
 
