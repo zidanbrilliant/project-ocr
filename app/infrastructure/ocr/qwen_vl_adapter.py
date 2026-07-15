@@ -22,6 +22,7 @@ Failure behaviour
 from __future__ import annotations
 
 import io
+import importlib.machinery
 import os
 import time
 from typing import Any
@@ -52,7 +53,7 @@ for _mod in ("torchcodec", "torchcodec.decoders", "torchcodec.decoders._core",
              "torchcodec._internally_replaced_utils", "torchaudio"):
     if _mod not in _sys.modules:
         _m = _types.ModuleType(_mod)
-        _m.__spec__ = None  # ponytail: __spec__=None is fine, vLLM only checks existence
+        _m.__spec__ = importlib.machinery.ModuleSpec(_mod, loader=None)
         _sys.modules[_mod] = _m
 
 
