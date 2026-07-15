@@ -3,12 +3,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class HealthResponse(BaseModel):
-    status: str = Field(default="healthy")
-    service: str = Field(default="ai-invoice-verification-agent")
-    timestamp: str = Field(default="")
-
-
 class JobStatusResponse(BaseModel):
     queue_id: str
     job_id: str
@@ -34,7 +28,6 @@ class ReprocessResponse(BaseModel):
     queue_id: str
     status: str = "REPROCESS_QUEUED"
     message: str = "Job reprocess has been queued."
-
 
 
 

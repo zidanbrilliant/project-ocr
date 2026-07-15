@@ -11,9 +11,6 @@ logger = get_logger(__name__)
 
 
 class ImagePreprocessor:
-    def __init__(self, target_size: int | None = None) -> None:
-        self._target_size = target_size
-
     def preprocess(self, image_bytes: bytes) -> bytes:
         img = self._load_image(image_bytes)
         img = self._denoise(img)
@@ -27,15 +24,6 @@ class ImagePreprocessor:
         gray = self._sharpen(gray)
         _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         return self._to_bytes(cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR))
-
-    def resize(self, image_bytes: bytes, max_size: int = 1920) -> bytes:
-        img = self._load_image(image_bytes)
-        h, w = img.shape[:2]
-        if max(h, w) > max_size:
-            scale = max_size / max(h, w)
-            new_w, new_h = int(w * scale), int(h * scale)
-            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        return self._to_bytes(img)
 
     def compute_quality(self, image_bytes: bytes) -> dict[str, Any]:
         img = self._load_image(image_bytes)

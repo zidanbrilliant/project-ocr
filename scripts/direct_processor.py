@@ -21,7 +21,6 @@ from app.infrastructure.document_converter.image_preprocessor import ImagePrepro
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
 from app.infrastructure.ocr.document_ocr import DocumentOCR
 from app.infrastructure.ocr.qwen_vl_adapter import QwenVLAdapter
-from app.infrastructure.storage.temp_file_manager import TempFileManager
 from app.shared.config.settings import settings
 from app.shared.constants import return_codes, statuses
 from app.shared.exceptions.base import DocumentError
@@ -53,7 +52,6 @@ class DirectProcessor:
         self._rule_evaluator = BusinessRuleEvaluator()
         self._conf_scorer = ConfidenceScoringService()
         self._remark = RemarkPolicy()
-        self._temp_mgr = TempFileManager()
 
         self._ocr = DocumentOCR()
         self._reasoning_qwen = QwenVLAdapter() if settings.ENABLE_QWEN_REASONING else None
@@ -435,4 +433,4 @@ class DirectProcessor:
             logger.info("db_save_ok", queue_id=queue_id)
 
     async def close(self) -> None:
-        self._temp_mgr.cleanup_all()
+        return None

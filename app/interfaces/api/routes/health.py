@@ -3,7 +3,6 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.interfaces.schemas.response_schemas import HealthResponse
 from app.shared.config.settings import settings
 from app.shared.health_registry import all_status as _model_status
 
