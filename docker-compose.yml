@@ -17,6 +17,9 @@ services:
       VLM_MODEL_PATH: ${VLM_MODEL_PATH:-/mnt/models/Qwen2.5-VL-7B-Instruct-AWQ}
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       VLLM_WORKER_MULTIPROC_METHOD: spawn
+      CC: gcc
+      CXX: g++
+      TRITON_CACHE_DIR: /tmp/triton-cache
     volumes:
       - ./models:/app/models:ro
       - /mnt/models:/mnt/models:ro

@@ -1,10 +1,20 @@
 FROM python:3.11-slim AS base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     libreoffice-writer \
     libgl1 \
     libglib2.0-0t64 \
     && rm -rf /var/lib/apt/lists/*
+
+# vLLM/Triton compiles small CUDA helper modules on first model load. Keep the
+# compiler in the runtime image: the compilation happens after the container
+# starts, not while this image is built.
+ENV CC=gcc \
+    CXX=g++ \
+    TRITON_CACHE_DIR=/tmp/triton-cache
+
+RUN mkdir -p "$TRITON_CACHE_DIR"
 
 WORKDIR /app
 
