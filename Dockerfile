@@ -30,8 +30,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-writer \
     libgl1 \
     libglib2.0-0 \
-    python3 \
-    python3-pip \
+    software-properties-common \
+    ca-certificates \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CC=gcc \
@@ -44,7 +51,8 @@ RUN mkdir -p "$TRITON_CACHE_DIR"
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN python3.11 -m ensurepip --upgrade && \
+    python3.11 -m pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 

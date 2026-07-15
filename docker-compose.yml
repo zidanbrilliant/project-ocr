@@ -62,7 +62,7 @@ services:
       - /mnt/models:/mnt/models:ro
     runtime: ${DOCKER_RUNTIME:-nvidia}
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\""]
+      test: ["CMD-SHELL", "python3.11 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\""]
       interval: 15s
       timeout: 10s
       retries: 20
