@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     YOLO_NMS_THRESHOLD: float = 0.45
 
     OCR_ENGINE: str = "document_ocr"
-    OCR_PROVIDER: Literal["qwen", "paddleocr_vl"] = "paddleocr_vl"
+    OCR_PROVIDER: Literal["qwen", "paddleocr_vl"] = "qwen"
     OCR_USE_GPU: bool = True
     OCR_ENABLE_PDF_TEXT_EXTRACTION: bool = True
 

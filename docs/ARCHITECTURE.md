@@ -33,12 +33,14 @@ Streamlit upload
   -> Streamlit result tabs
 ```
 
-The selected OCR provider is controlled by `OCR_PROVIDER`.
+The selected OCR provider is controlled by `OCR_PROVIDER`. DGX Spark standalone Docker defaults to `qwen` because the container runs as `aarch64` and PaddleOCR/PaddlePaddle GPU wheels are not installed in this image.
 
 | Provider | Value | Model path |
 |---|---|---|
 | PaddleOCR-VL | `paddleocr_vl` | `PADDLEOCR_VL_MODEL_DIR=/mnt/models/PaddleOCR-VL-1.6` |
 | Qwen2.5-VL | `qwen` | `VLM_MODEL_PATH=/mnt/models/Qwen2.5-VL-7B-Instruct-AWQ` |
+
+Use `paddleocr_vl` only with a compatible Paddle runtime or a dedicated PaddleOCR-VL service image.
 
 EasyOCR is not part of the testing pipeline. If the selected provider cannot load, OCR returns an explicit error and the Streamlit UI shows the failure.
 
@@ -111,4 +113,4 @@ For local non-Docker testing:
 streamlit run scripts/upload_app.py
 ```
 
-The local Python environment must already have the correct PaddleOCR/PaddlePaddle or vLLM packages for the selected provider.
+The local Python environment must already have the correct vLLM or PaddleOCR/PaddlePaddle packages for the selected provider. On DGX Spark `aarch64`, the default standalone provider is Qwen.

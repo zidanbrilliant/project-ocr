@@ -16,14 +16,14 @@ Default testing config:
 - `RUN_MODE=standalone`
 - `ENABLE_RABBITMQ=false`
 - `ENABLE_DATABASE=false`
-- `OCR_PROVIDER=paddleocr_vl`
-- `PADDLEOCR_VL_MODEL_DIR=/mnt/models/PaddleOCR-VL-1.6`
+- `OCR_PROVIDER=qwen`
 - `VLM_MODEL_PATH=/mnt/models/Qwen2.5-VL-7B-Instruct-AWQ`
+- `PADDLEOCR_VL_MODEL_DIR=/mnt/models/PaddleOCR-VL-1.6`
 
-To test Qwen-only OCR, set:
+DGX Spark standalone Docker runs as `aarch64`, so Qwen is the default OCR provider for this image. To test PaddleOCR-VL, use a compatible Paddle runtime and set:
 
 ```env
-OCR_PROVIDER=qwen
+OCR_PROVIDER=paddleocr_vl
 ```
 
 To enable optional Qwen reasoning after OCR/YOLO:
