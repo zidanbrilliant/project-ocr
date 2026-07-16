@@ -9,7 +9,7 @@ cp .env.example .env
 docker compose --profile standalone up --build streamlit qwen
 ```
 
-Open `http://localhost:8501`, upload a PDF/JPG/PNG, choose `INV` or `DN`, then click `Process`.
+Open `http://localhost:8501` on DGX, or `http://<DGX-IP>` from your laptop, upload a PDF/JPG/PNG, choose `INV` or `DN`, then click `Process`.
 
 Default testing config:
 
