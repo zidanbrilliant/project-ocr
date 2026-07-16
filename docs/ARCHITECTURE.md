@@ -33,7 +33,7 @@ Streamlit upload
   -> Streamlit result tabs
 ```
 
-The selected OCR provider is controlled by `OCR_PROVIDER`. DGX Spark standalone Docker defaults to `paddleocr_vl`.
+The selected OCR provider is controlled by `OCR_PROVIDER`. DGX Spark standalone Docker defaults to `qwen`.
 
 | Provider | Value | Model path |
 |---|---|---|

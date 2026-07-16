@@ -16,24 +16,11 @@ Default testing config:
 - `RUN_MODE=standalone`
 - `ENABLE_RABBITMQ=false`
 - `ENABLE_DATABASE=false`
-- `OCR_PROVIDER=paddleocr_vl`
-- `PADDLEOCR_VL_MODEL_DIR=/mnt/models/PaddleOCR-VL-1.6`
-- `ENABLE_QWEN_REASONING=true`
-- `QWEN_SERVICE_URL=http://qwen:8000`
+- `OCR_PROVIDER=qwen`
+- `ENABLE_QWEN_REASONING=false`
 - `QWEN_SERVICE_URL=http://qwen:8000`
 
-DGX Spark standalone Docker defaults to PaddleOCR-VL. To switch OCR to Qwen, set:
-
-```env
-OCR_PROVIDER=qwen
-```
-
-To keep PaddleOCR-VL as OCR and still enable optional Qwen reasoning after OCR/YOLO:
-
-```env
-OCR_PROVIDER=paddleocr_vl
-ENABLE_QWEN_REASONING=true
-```
+DGX Spark standalone Docker defaults to Qwen GPU OCR.
 
 ## Pipeline
 

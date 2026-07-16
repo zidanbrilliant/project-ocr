@@ -12,9 +12,8 @@ services:
       RUN_MODE: standalone
       ENABLE_DATABASE: "false"
       ENABLE_RABBITMQ: "false"
-      OCR_PROVIDER: paddleocr_vl
-      PADDLEOCR_VL_MODEL_DIR: ${PADDLEOCR_VL_MODEL_DIR:-/mnt/models/PaddleOCR-VL-1.6}
-      ENABLE_QWEN_REASONING: "true"
+      OCR_PROVIDER: qwen
+      ENABLE_QWEN_REASONING: "false"
       QWEN_SERVICE_URL: http://qwen:8000
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       VLLM_WORKER_MULTIPROC_METHOD: spawn
@@ -49,7 +48,7 @@ services:
       ENABLE_DATABASE: "false"
       ENABLE_RABBITMQ: "false"
       API_AUTH_MODE: none
-      OCR_PROVIDER: paddleocr_vl
+      OCR_PROVIDER: qwen
       QWEN_SERVICE_URL: ""
       VLM_MODEL_PATH: ${VLM_MODEL_PATH:-/mnt/models/Qwen2.5-VL-7B-Instruct-AWQ}
       YOLO_CONFIG_DIR: /tmp/Ultralytics
