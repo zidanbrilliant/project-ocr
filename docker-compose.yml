@@ -12,9 +12,9 @@ services:
       RUN_MODE: standalone
       ENABLE_DATABASE: "false"
       ENABLE_RABBITMQ: "false"
-      OCR_PROVIDER: qwen
+      OCR_PROVIDER: ${OCR_PROVIDER:-paddleocr_vl}
       ENABLE_QWEN_REASONING: "false"
-      QWEN_SERVICE_URL: http://qwen:8000
+      QWEN_SERVICE_URL: ${QWEN_SERVICE_URL:-http://qwen:8000}
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       VLLM_WORKER_MULTIPROC_METHOD: spawn
       CC: gcc
@@ -23,9 +23,6 @@ services:
     volumes:
       - ./models:/app/models:ro
       - /mnt/models:/mnt/models:ro
-    depends_on:
-      qwen:
-        condition: service_healthy
     runtime: ${DOCKER_RUNTIME:-nvidia}
     deploy:
       resources:

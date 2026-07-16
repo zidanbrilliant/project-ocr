@@ -60,10 +60,7 @@ class PaddleOCRVLAdapter:
         try:
             from paddleocr import PaddleOCRVL  # type: ignore[import]
 
-            try:
-                pipeline = PaddleOCRVL(vl_rec_model_dir=model_dir)
-            except TypeError:
-                pipeline = PaddleOCRVL(model_dir)
+            pipeline = self._create_pipeline(PaddleOCRVL, model_dir)
 
             self._pipeline = pipeline
             _pipeline_instance = pipeline
@@ -84,6 +81,34 @@ class PaddleOCRVLAdapter:
             self._load_error = f"Exception: {exc}"
             _register_health("paddleocr-vl", available=False, error=self._load_error)
             logger.warning("paddleocr_vl_load_failed", error=str(exc))
+
+    def _create_pipeline(self, paddle_ocr_vl: Any, model_dir: str) -> Any:
+        # Prefer the full documented v1.6 pipeline. Fall back to the legacy
+        # constructor signature if the installed package predates these kwargs.
+        kwargs = {
+            "pipeline_version": settings.PADDLEOCR_VL_PIPELINE_VERSION,
+            "engine": settings.PADDLEOCR_VL_ENGINE,
+            "device": settings.PADDLEOCR_VL_DEVICE,
+            "use_layout_detection": settings.PADDLEOCR_VL_USE_LAYOUT_DETECTION,
+            "format_block_content": settings.PADDLEOCR_VL_FORMAT_BLOCK_CONTENT,
+            "use_queues": settings.PADDLEOCR_VL_USE_QUEUES,
+            "layout_shape_mode": settings.PADDLEOCR_VL_LAYOUT_SHAPE_MODE,
+            "vl_rec_model_dir": model_dir,
+        }
+
+        try:
+            return paddle_ocr_vl(**kwargs)
+        except TypeError:
+            pass
+
+        fallback_kwargs = {
+            "vl_rec_model_dir": model_dir,
+        }
+
+        try:
+            return paddle_ocr_vl(**fallback_kwargs)
+        except TypeError:
+            return paddle_ocr_vl(model_dir)
 
     async def run(self, image_bytes: bytes, extension: str = ".png") -> dict[str, Any]:
         start = time.monotonic()
@@ -112,6 +137,9 @@ class PaddleOCRVLAdapter:
                 tmp_path.unlink(missing_ok=True)
 
             parsed = _parse_paddle_prediction(prediction)
+            structured = _to_plain_data(prediction)
+            if structured is not None:
+                parsed["structured_json"] = structured
             parsed["processing_time_ms"] = int((time.monotonic() - start) * 1000)
             return parsed
         except Exception as exc:
@@ -173,7 +201,8 @@ def _collect_text(data: Any, tokens: list[dict[str, Any]], lines: list[str], con
             confidences.append(confidence)
 
         for value in data.values():
-            _collect_text(value, tokens, lines, confidences)
+            if isinstance(value, (dict, list)):
+                _collect_text(value, tokens, lines, confidences)
     elif isinstance(data, list):
         for value in data:
             _collect_text(value, tokens, lines, confidences)

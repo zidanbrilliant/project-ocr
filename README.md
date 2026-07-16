@@ -6,7 +6,7 @@ AI service for Toyota invoice and delivery-note verification. The testing flow i
 
 ```bash
 cp .env.example .env
-docker compose --profile standalone up --build streamlit qwen
+docker compose --profile standalone up --build streamlit
 ```
 
 Open `http://localhost:8501` on DGX, or `http://<DGX-IP>:8502` from your laptop, upload a PDF/JPG/PNG, choose `INV` or `DN`, then click `Process`.
@@ -16,11 +16,11 @@ Default testing config:
 - `RUN_MODE=standalone`
 - `ENABLE_RABBITMQ=false`
 - `ENABLE_DATABASE=false`
-- `OCR_PROVIDER=qwen`
+- `OCR_PROVIDER=paddleocr_vl`
 - `ENABLE_QWEN_REASONING=false`
 - `QWEN_SERVICE_URL=http://qwen:8000`
 
-DGX Spark standalone Docker defaults to Qwen GPU OCR.
+DGX Spark standalone Docker defaults to PaddleOCR-VL OCR.
 
 ## Pipeline
 

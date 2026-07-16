@@ -33,12 +33,14 @@ Streamlit upload
   -> Streamlit result tabs
 ```
 
-The selected OCR provider is controlled by `OCR_PROVIDER`. DGX Spark standalone Docker defaults to `qwen`.
+The selected OCR provider is controlled by `OCR_PROVIDER`. DGX Spark standalone Docker defaults to `paddleocr_vl` so the web UI can start without waiting for Qwen.
 
 | Provider | Value | Model path |
 |---|---|---|
 | PaddleOCR-VL | `paddleocr_vl` | `PADDLEOCR_VL_MODEL_DIR=/mnt/models/PaddleOCR-VL-1.6` |
 | Qwen2.5-VL | `qwen` | `VLM_MODEL_PATH=/mnt/models/Qwen2.5-VL-7B-Instruct-AWQ` |
+
+PaddleOCR-VL POC defaults target `pipeline_version=v1.6`, `engine=transformers`, `device=gpu`, and layout-aware structured output.
 
 Use `qwen` only when the Qwen/vLLM runtime is available.
 
@@ -113,4 +115,4 @@ For local non-Docker testing:
 streamlit run scripts/upload_app.py
 ```
 
-The local Python environment must already have the correct vLLM or PaddleOCR/PaddlePaddle packages for the selected provider. On DGX Spark `aarch64`, the default standalone provider is PaddleOCR-VL.
+The local Python environment must already have the correct vLLM or PaddleOCR/PaddlePaddle packages for the selected provider. On DGX Spark `aarch64`, the default standalone provider is PaddleOCR-VL, with the v1.6 POC using the Transformers engine first.

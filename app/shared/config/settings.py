@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     VLM_GPU_MEMORY_UTILIZATION: float = 0.20
     QWEN_SERVICE_URL: str = ""
     PADDLEOCR_VL_MODEL_DIR: str = "/mnt/models/PaddleOCR-VL-1.6"
+    PADDLEOCR_VL_PIPELINE_VERSION: str = "v1.6"
+    PADDLEOCR_VL_ENGINE: str = "transformers"
+    PADDLEOCR_VL_DEVICE: str = "gpu"
+    PADDLEOCR_VL_USE_LAYOUT_DETECTION: bool = True
+    PADDLEOCR_VL_FORMAT_BLOCK_CONTENT: bool = True
+    PADDLEOCR_VL_USE_QUEUES: bool = True
+    PADDLEOCR_VL_LAYOUT_SHAPE_MODE: str = "auto"
 
     ENABLE_QWEN_REASONING: bool = False
 
