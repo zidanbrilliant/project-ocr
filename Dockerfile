@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS qwen-base
+FROM nvcr.io/nvidia/pytorch:26.03-py3 AS qwen-base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC
@@ -33,19 +33,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-writer \
     libgl1 \
     libglib2.0-0 \
-    software-properties-common \
-    ca-certificates \
-    gnupg \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ >/etc/timezone
-
-RUN add-apt-repository -y ppa:deadsnakes/ppa && \
-    apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-venv \
-    && rm -rf /var/lib/apt/lists/*
 
 ENV CC=gcc \
     CXX=g++ \
@@ -57,8 +48,7 @@ RUN mkdir -p "$TRITON_CACHE_DIR"
 WORKDIR /app
 
 COPY requirements.txt .
-RUN python3.11 -m ensurepip --upgrade && \
-    python3.11 -m pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
