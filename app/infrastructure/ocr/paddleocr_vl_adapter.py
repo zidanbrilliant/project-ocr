@@ -131,12 +131,15 @@ class PaddleOCRVLAdapter:
                 tmp_path = Path(tmp.name)
 
             try:
-                prediction = self._pipeline.predict(input=str(tmp_path))
+                # PaddleOCR-VL returns a generator in current releases. Consume it
+                # while the temporary file still exists; otherwise its lazy reader
+                # sees a deleted input file.
+                prediction = _prediction_items(self._pipeline.predict(input=str(tmp_path)))
             finally:
                 tmp_path.unlink(missing_ok=True)
 
             parsed = _parse_paddle_prediction(prediction)
-            structured = _to_plain_data(prediction)
+            structured = _to_plain_data(prediction[0]) if len(prediction) == 1 else _to_plain_data(prediction)
             if structured is not None:
                 parsed["structured_json"] = structured
             parsed["processing_time_ms"] = int((time.monotonic() - start) * 1000)
@@ -154,7 +157,7 @@ class PaddleOCRVLAdapter:
 
 
 def _parse_paddle_prediction(prediction: Any) -> dict[str, Any]:
-    items = prediction if isinstance(prediction, list) else [prediction]
+    items = _prediction_items(prediction)
     tokens: list[dict[str, Any]] = []
     lines: list[str] = []
     confidences: list[float] = []
@@ -174,16 +177,31 @@ def _parse_paddle_prediction(prediction: Any) -> dict[str, Any]:
 
 
 def _to_plain_data(item: Any) -> Any:
-    if hasattr(item, "to_dict"):
-        return item.to_dict()
-    if hasattr(item, "json"):
+    to_dict = getattr(item, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    json_data = getattr(item, "json", None)
+    if callable(json_data):
         try:
-            return json.loads(item.json())
+            return json.loads(json_data())
         except Exception:
-            return item.json()
+            return json_data()
+    if isinstance(json_data, (dict, list)):
+        return json_data
     if isinstance(item, (dict, list, str, int, float, bool)) or item is None:
         return item
     return getattr(item, "__dict__", str(item))
+
+
+def _prediction_items(prediction: Any) -> list[Any]:
+    if isinstance(prediction, list):
+        return prediction
+    if isinstance(prediction, (dict, str, bytes)) or prediction is None:
+        return [prediction]
+    try:
+        return list(iter(prediction))
+    except TypeError:
+        return [prediction]
 
 
 def _collect_text(data: Any, tokens: list[dict[str, Any]], lines: list[str], confidences: list[float]) -> None:

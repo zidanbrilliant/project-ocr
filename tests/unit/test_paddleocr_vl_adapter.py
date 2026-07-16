@@ -82,3 +82,31 @@ def test_run_includes_structured_json(monkeypatch: pytest.MonkeyPatch, tmp_path)
 
     assert result["raw_text"] == "INV-001"
     assert result["structured_json"]["pages"][0]["blocks"][0]["text"] == "INV-001"
+
+
+def test_run_supports_generator_results_with_json_dict(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    class FakePrediction:
+        json = {"pages": [{"blocks": [{"text": "INV-002", "score": 0.99}]}]}
+
+    class FakePaddleOCRVL:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def predict(self, input: str):  # noqa: A002
+            yield FakePrediction()
+
+    monkeypatch.setitem(sys.modules, "paddleocr", types.SimpleNamespace(PaddleOCRVL=FakePaddleOCRVL))
+    monkeypatch.setattr(adapter.settings, "PADDLEOCR_VL_MODEL_DIR", str(tmp_path))
+    monkeypatch.setattr(adapter, "_pipeline_instance", None)
+    monkeypatch.setattr(
+        adapter,
+        "logger",
+        types.SimpleNamespace(info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None),
+    )
+
+    ocr = adapter.PaddleOCRVLAdapter()
+    asyncio.run(ocr.warmup())
+    result = asyncio.run(ocr.run(b"fake-image-bytes"))
+
+    assert result["raw_text"] == "INV-002"
+    assert result["average_confidence"] == 99.0

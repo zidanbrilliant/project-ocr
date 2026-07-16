@@ -1,29 +1,5 @@
-FROM python:3.11-slim AS base
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libreoffice-writer \
-    libgl1 \
-    libglib2.0-0t64 \
-    && rm -rf /var/lib/apt/lists/*
-
-# vLLM/Triton compiles small CUDA helper modules on first model load. Keep the
-# compiler in the runtime image: the compilation happens after the container
-# starts, not while this image is built.
-ENV CC=gcc \
-    CXX=g++ \
-    TRITON_CACHE_DIR=/tmp/triton-cache
-
-RUN mkdir -p "$TRITON_CACHE_DIR"
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-FROM nvcr.io/nvidia/pytorch:26.03-py3 AS qwen-base
+ARG NVIDIA_PYTORCH_IMAGE=nvcr.io/nvidia/pytorch:26.03-py3
+FROM ${NVIDIA_PYTORCH_IMAGE} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC
@@ -38,10 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ >/etc/timezone
 
+# vLLM/Triton compiles small CUDA helper modules on first model load. Keep the
+# compiler in the runtime image: the compilation happens after the container
+# starts, not while this image is built.
 ENV CC=gcc \
     CXX=g++ \
-    TRITON_CACHE_DIR=/tmp/triton-cache \
-    PYTHONUNBUFFERED=1
+    TRITON_CACHE_DIR=/tmp/triton-cache
 
 RUN mkdir -p "$TRITON_CACHE_DIR"
 
@@ -51,7 +29,7 @@ ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /app
 
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
@@ -65,5 +43,5 @@ FROM base AS streamlit
 EXPOSE 8501
 CMD ["streamlit", "run", "scripts/upload_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
 
-FROM qwen-base AS qwen
+FROM base AS qwen
 CMD ["uvicorn", "app.interfaces.api.qwen_main:app", "--host", "0.0.0.0", "--port", "8000"]

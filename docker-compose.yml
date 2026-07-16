@@ -17,6 +17,8 @@ services:
       QWEN_SERVICE_URL: ${QWEN_SERVICE_URL:-http://qwen:8000}
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       VLLM_WORKER_MULTIPROC_METHOD: spawn
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       CC: gcc
       CXX: g++
       TRITON_CACHE_DIR: /tmp/triton-cache
@@ -51,6 +53,8 @@ services:
       VLM_GPU_MEMORY_UTILIZATION: ${VLM_GPU_MEMORY_UTILIZATION:-0.20}
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       VLLM_WORKER_MULTIPROC_METHOD: spawn
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       CC: gcc
       CXX: g++
       TRITON_CACHE_DIR: /tmp/triton-cache
