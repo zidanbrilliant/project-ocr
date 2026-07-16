@@ -45,6 +45,9 @@ ENV CC=gcc \
 
 RUN mkdir -p "$TRITON_CACHE_DIR"
 
+RUN python -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+
 WORKDIR /app
 
 COPY requirements.txt .
