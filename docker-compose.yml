@@ -51,6 +51,7 @@ services:
       OCR_PROVIDER: qwen
       QWEN_SERVICE_URL: ""
       VLM_MODEL_PATH: ${VLM_MODEL_PATH:-/mnt/models/Qwen2.5-VL-7B-Instruct-AWQ}
+      VLM_GPU_MEMORY_UTILIZATION: ${VLM_GPU_MEMORY_UTILIZATION:-0.20}
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       VLLM_WORKER_MULTIPROC_METHOD: spawn
       CC: gcc

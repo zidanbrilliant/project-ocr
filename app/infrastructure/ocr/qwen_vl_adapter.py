@@ -148,7 +148,7 @@ class QwenVLAdapter:
                 dtype="float16",            # AWQ does not support bfloat16 yet
                 trust_remote_code=True,
                 # Limit GPU memory to leave headroom for YOLO and OCR parsing.
-                gpu_memory_utilization=0.55,
+                gpu_memory_utilization=settings.VLM_GPU_MEMORY_UTILIZATION,
                 max_model_len=4096,
                 download_dir=None,
                 # ponytail: limit concurrent requests for single-image OCR
