@@ -104,11 +104,12 @@ class DirectProcessor:
             ext = doc_info.get("extension", "")
             page_images: list[bytes] = []
             ocr_ext = ".png" if ext == ".pdf" else ext
+            pdf_text_result: dict[str, Any] = {}
             ocr_raw: dict[str, Any] = {}
             if ext == ".pdf":
-                pdf_text = await self._ocr.run(file_bytes, extension=".pdf")
-                if pdf_text.get("raw_text", "").strip():
-                    ocr_raw = pdf_text
+                pdf_text_result = await self._ocr.run(file_bytes, extension=".pdf")
+                if pdf_text_result.get("raw_text", "").strip():
+                    ocr_raw = dict(pdf_text_result)
                     page_images = self._pdf_renderer.render(file_bytes)
                 else:
                     page_images = self._pdf_renderer.render(file_bytes)
@@ -173,6 +174,20 @@ class DirectProcessor:
                 ocr_raw["engine_name"] = page_ocrs[0].get("engine_name", "none")
             if ocr_errors:
                 ocr_raw["error"] = ocr_errors[0]
+
+            if not ocr_raw.get("raw_text", "").strip() and pdf_text_result.get("raw_text", "").strip():
+                ocr_raw = {
+                    "engine_name": pdf_text_result.get("engine_name", "pypdf"),
+                    "raw_text": pdf_text_result.get("raw_text", ""),
+                    "tokens_json": pdf_text_result.get("tokens_json", []),
+                    "average_confidence": pdf_text_result.get("average_confidence", 95.0),
+                }
+
+            if not ocr_raw.get("raw_text", "").strip():
+                ocr_raw.setdefault("engine_name", page_ocrs[0].get("engine_name", "none") if page_ocrs else "none")
+                ocr_raw["error"] = ocr_raw.get("error") or "selected OCR provider returned no text"
+                result["error"] = result.get("error") or ocr_raw["error"]
+
             result["ocr"] = ocr_raw
             result["_page_ocrs"] = page_ocrs
             result["_page_bcs"] = page_bcs

@@ -127,20 +127,19 @@ def _render_model_status(processor: DirectProcessor) -> None:
 
 async def _process_uploaded_file(uploaded, doc_type: str) -> None:
     with st.spinner("Processing document..."):
-        processor = get_processor()
-        await processor.warmup()
-
-        uploaded_bytes = uploaded.getvalue()
-        if not uploaded_bytes:
-            st.session_state.processing_error = "Uploaded file is empty."
-            return
-
-        file_hash = hashlib.sha256(uploaded_bytes).hexdigest()
-        file_name = uploaded.name
-        content_type = uploaded.type or ""
-        file_size = len(uploaded_bytes)
-
         try:
+            processor = get_processor()
+            await processor.warmup()
+
+            uploaded_bytes = uploaded.getvalue()
+            if not uploaded_bytes:
+                raise ValueError("Uploaded file is empty.")
+
+            file_hash = hashlib.sha256(uploaded_bytes).hexdigest()
+            file_name = uploaded.name
+            content_type = uploaded.type or ""
+            file_size = len(uploaded_bytes)
+
             started = time.perf_counter()
             raw_result = await processor.process(uploaded_bytes, file_name, doc_type)
             elapsed = round((time.perf_counter() - started) * 1000)
@@ -162,10 +161,15 @@ async def _process_uploaded_file(uploaded, doc_type: str) -> None:
             st.session_state.selected_page_index = 0
         except Exception as exc:
             st.session_state.processing_error = str(exc)
+            st.session_state.processing_done = False
         st.rerun()
 
 
 def _display_results(ui_result: dict) -> None:
+    errors = ui_result.get("errors") or []
+    if errors:
+        st.error("\n".join(str(err) for err in errors))
+
     pages = ui_result.get("pages", [])
     if not pages:
         st.error("No pages in result.")

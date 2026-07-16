@@ -91,8 +91,11 @@ class QwenVLAdapter:
         if self._service_url:
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    response = await client.get(f"{self._service_url}/health")
+                    response = await client.get(f"{self._service_url}/api/v1/qwen/health")
                     response.raise_for_status()
+                    payload = response.json()
+                    if not isinstance(payload, dict) or payload.get("status") != "healthy":
+                        raise RuntimeError(f"Unexpected Qwen health payload: {payload}")
                 self._available = True
                 self._load_error = None
                 _register_health("qwen2.5-vl", available=True, remote=True)
@@ -251,6 +254,15 @@ class QwenVLAdapter:
             # inference bursts (model is already in GPU memory).
             outputs = self._llm.generate([llm_input], sampling_params=sampling_params)
             output_text: str = outputs[0].outputs[0].text.strip()
+            if not output_text:
+                elapsed_ms = int((time.monotonic() - start) * 1000)
+                return {
+                    "engine_name": engine_name,
+                    "raw_text": "",
+                    "error": "empty_ocr_output",
+                    "average_confidence": 0.0,
+                    "processing_time_ms": elapsed_ms,
+                }
 
             elapsed_ms = int((time.monotonic() - start) * 1000)
             lines = [ln for ln in output_text.split("\n") if ln.strip()]
@@ -285,8 +297,36 @@ class QwenVLAdapter:
             }
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(f"{self._service_url}/api/v1/qwen/run", json=payload)
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    detail = response.text.strip()
+                    try:
+                        body = response.json()
+                        if isinstance(body, dict):
+                            detail = str(body.get("detail") or body.get("error") or detail)
+                    except Exception:
+                        pass
+                    return {
+                        "engine_name": engine_name,
+                        "raw_text": "",
+                        "error": f"remote_http_{response.status_code}:{detail or 'qwen_request_failed'}",
+                        "average_confidence": 0.0,
+                        "processing_time_ms": int((time.monotonic() - start) * 1000),
+                    }
                 result = response.json()
+                if not isinstance(result, dict):
+                    raise RuntimeError(f"Unexpected response payload type: {type(result).__name__}")
+                raw_text = str(result.get("raw_text") or "").strip()
+                if not raw_text:
+                    return {
+                        "engine_name": engine_name,
+                        "raw_text": "",
+                        "error": "empty_ocr_output",
+                        "average_confidence": 0.0,
+                        "processing_time_ms": int((time.monotonic() - start) * 1000),
+                    }
+                result["raw_text"] = raw_text
+                result.setdefault("tokens_json", [{"text": line, "confidence": 95.0} for line in raw_text.splitlines() if line.strip()])
+                result.setdefault("average_confidence", 95.0)
             result["processing_time_ms"] = int((time.monotonic() - start) * 1000)
             return result
         except Exception:
