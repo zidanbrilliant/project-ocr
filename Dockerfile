@@ -25,6 +25,9 @@ COPY . .
 
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS qwen-base
 
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libreoffice-writer \
@@ -33,9 +36,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     ca-certificates \
     gnupg \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-RUN add-apt-repository ppa:deadsnakes/ppa && \
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ >/etc/timezone
+
+RUN add-apt-repository -y ppa:deadsnakes/ppa && \
     apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-venv \
