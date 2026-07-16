@@ -92,7 +92,6 @@ class PaddleOCRVLAdapter:
             "use_layout_detection": settings.PADDLEOCR_VL_USE_LAYOUT_DETECTION,
             "format_block_content": settings.PADDLEOCR_VL_FORMAT_BLOCK_CONTENT,
             "use_queues": settings.PADDLEOCR_VL_USE_QUEUES,
-            "layout_shape_mode": settings.PADDLEOCR_VL_LAYOUT_SHAPE_MODE,
             "vl_rec_model_dir": model_dir,
         }
 

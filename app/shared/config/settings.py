@@ -77,7 +77,6 @@ class Settings(BaseSettings):
     PADDLEOCR_VL_USE_LAYOUT_DETECTION: bool = True
     PADDLEOCR_VL_FORMAT_BLOCK_CONTENT: bool = True
     PADDLEOCR_VL_USE_QUEUES: bool = True
-    PADDLEOCR_VL_LAYOUT_SHAPE_MODE: str = "auto"
 
     ENABLE_QWEN_REASONING: bool = False
 

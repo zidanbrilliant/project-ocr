@@ -39,7 +39,6 @@ def test_warmup_uses_vl_rec_model_dir(monkeypatch: pytest.MonkeyPatch, tmp_path)
         "use_layout_detection": True,
         "format_block_content": True,
         "use_queues": True,
-        "layout_shape_mode": "auto",
         "vl_rec_model_dir": str(tmp_path),
     }
 
