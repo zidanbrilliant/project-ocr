@@ -14,17 +14,34 @@ class YOLOAdapter:
     def __init__(self) -> None:
         self._model = None
         self._loaded = False
+        self._load_error: str | None = None
+        self._last_detect_error: str | None = None
+        self._device = "cpu"
+
+    @property
+    def load_error(self) -> str | None:
+        return self._load_error
+
+    @property
+    def last_detect_error(self) -> str | None:
+        return self._last_detect_error
+
+    @property
+    def device(self) -> str:
+        return self._device
 
     async def warmup(self) -> None:
         try:
             from ultralytics import YOLO
             self._model = YOLO(settings.YOLO_MODEL_PATH)
             self._class_names = self._model.names
-            device = _get_device()
-            _register_health("yolo", available=True, model=str(settings.YOLO_MODEL_PATH), device=device)
-            logger.info("yolo_loaded", classes=dict(self._class_names), device=device)
+            self._device = _get_device()
+            _register_health("yolo", available=True, model=str(settings.YOLO_MODEL_PATH), device=self._device)
+            logger.info("yolo_loaded", classes=dict(self._class_names), device=self._device)
             self._loaded = True
+            self._load_error = None
         except Exception as e:
+            self._load_error = str(e)
             _register_health("yolo", available=False, error=str(e), model=str(settings.YOLO_MODEL_PATH))
             logger.warning("yolo_load_failed", error=str(e))
             self._loaded = False
@@ -37,6 +54,7 @@ class YOLOAdapter:
             return []
 
         try:
+            self._last_detect_error = None
             import cv2
             imgs = []
             for b in image_bytes_list:
@@ -52,7 +70,7 @@ class YOLOAdapter:
                 imgsz=input_size or settings.YOLO_INPUT_SIZE,
                 conf=settings.YOLO_CONFIDENCE_THRESHOLD,
                 iou=settings.YOLO_NMS_THRESHOLD,
-                device=_get_device(),
+                device=self._device,
                 verbose=False,
             )
             all_detections: list[dict[str, Any]] = []
@@ -73,6 +91,7 @@ class YOLOAdapter:
             return all_detections
 
         except Exception as e:
+            self._last_detect_error = str(e)
             logger.warning("yolo_detect_failed", error=str(e))
             return []
 

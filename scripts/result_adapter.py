@@ -115,7 +115,7 @@ def normalize_pipeline_result_for_ui(
             "page_count": page_count,
         },
         "pages": ui_pages,
-        "errors": [raw_result["error"]] if raw_result.get("error") else [],
+        "errors": [err for err in (raw_result.get("error"), raw_result.get("detection_error")) if err],
         "pipeline_raw": {
             "total_confidence": total_conf,
             "has_ocr": has_ocr,

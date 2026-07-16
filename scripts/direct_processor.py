@@ -200,8 +200,14 @@ class DirectProcessor:
             all_detections: list[dict[str, Any]] = []
             if preprocessed:
                 all_detections = await self._yolo.detect_batch(preprocessed)
+                if not all_detections and self._yolo.load_error is None:
+                    all_detections = await self._yolo.detect_batch(preprocessed, input_size=960)
             else:
                 all_detections = []
+
+            yolo_error = self._yolo.load_error or self._yolo.last_detect_error
+            if yolo_error:
+                result["detection_error"] = yolo_error
 
             det_entities = [map_to_entity(d) for d in all_detections]
             aggregated = aggregate_per_object_type(det_entities)
@@ -215,6 +221,8 @@ class DirectProcessor:
                 }
                 for obj_type, d in aggregated.items()
             }
+            if yolo_error and not all_detections:
+                result["error"] = result.get("error") or yolo_error
             barcode_raw = bc_raw
             result["barcode"] = barcode_raw
 
