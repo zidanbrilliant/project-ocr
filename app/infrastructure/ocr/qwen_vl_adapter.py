@@ -22,10 +22,12 @@ Failure behaviour
 from __future__ import annotations
 
 import base64
-import io
 import importlib.machinery
+import io
 import os
+import sys as _sys
 import time
+import types as _types
 from typing import Any
 
 import httpx
@@ -42,11 +44,13 @@ from app.shared.logging.logger import get_logger
 logger = get_logger(__name__)
 
 # Stub torchcodec and torchaudio so vLLM import doesn't crash
-import sys as _sys
-import types as _types
-
-for _mod in ("torchcodec", "torchcodec.decoders", "torchcodec.decoders._core",
-            "torchcodec._internally_replaced_utils", "torchaudio"):
+for _mod in (
+    "torchcodec",
+    "torchcodec.decoders",
+    "torchcodec.decoders._core",
+    "torchcodec._internally_replaced_utils",
+    "torchaudio",
+):
     if _mod not in _sys.modules:
         _m = _types.ModuleType(_mod)
         _m.__spec__ = importlib.machinery.ModuleSpec(_mod, loader=None)
@@ -69,7 +73,7 @@ class QwenVLAdapter:
     """
 
     def __init__(self) -> None:
-        self._llm: Any | None = None       # vllm.LLM instance
+        self._llm: Any | None = None  # vllm.LLM instance
         self._available: bool = False
         self._load_error: str | None = None
         self._service_url = settings.QWEN_SERVICE_URL.rstrip("/")
@@ -145,14 +149,14 @@ class QwenVLAdapter:
             llm_kwargs: dict[str, Any] = dict(
                 model=model_path,
                 quantization=quant,
-                dtype="float16",            # AWQ does not support bfloat16 yet
+                dtype="float16",  # AWQ does not support bfloat16 yet
                 trust_remote_code=True,
                 # Limit GPU memory to leave headroom for YOLO and OCR parsing.
                 gpu_memory_utilization=settings.VLM_GPU_MEMORY_UTILIZATION,
-                max_model_len=4096,
+                max_model_len=settings.QWEN_MAX_MODEL_LEN,
                 download_dir=None,
                 # ponytail: limit concurrent requests for single-image OCR
-                max_num_seqs=1,
+                max_num_seqs=settings.QWEN_MAX_NUM_SEQS,
             )
 
             self._llm = LLM(**llm_kwargs)
@@ -164,8 +168,9 @@ class QwenVLAdapter:
 
         except ImportError as exc:
             self._load_error = f"ImportError: {str(exc)}"
-            _register_health("qwen2.5-vl", available=False, error=self._load_error,
-                            hint="Run `pip install vllm>=0.7.2`")
+            _register_health(
+                "qwen2.5-vl", available=False, error=self._load_error, hint="Run `pip install vllm>=0.7.2`"
+            )
             logger.warning(
                 "qwen_vl_not_available",
                 error=str(exc),
@@ -244,7 +249,7 @@ class QwenVLAdapter:
             }
 
             sampling_params = SamplingParams(
-                temperature=0.0,                  # deterministic
+                temperature=0.0,  # deterministic
                 max_tokens=settings.VLM_MAX_TOKENS,
                 stop=["<|im_end|>", "<|endoftext|>"],
             )
@@ -266,13 +271,15 @@ class QwenVLAdapter:
 
             elapsed_ms = int((time.monotonic() - start) * 1000)
             lines = [ln for ln in output_text.split("\n") if ln.strip()]
-            tokens = [{"text": ln, "confidence": 95.0} for ln in lines]
+            tokens = [{"text": ln, "confidence": None} for ln in lines]
 
             return {
                 "engine_name": engine_name,
                 "raw_text": output_text,
                 "tokens_json": tokens,
-                "average_confidence": 95.0,
+                # Generative VLM output is not calibrated. Downstream gates use
+                # completeness/rule agreement instead of a fabricated score.
+                "average_confidence": None,
                 "processing_time_ms": elapsed_ms,
             }
 
@@ -287,7 +294,9 @@ class QwenVLAdapter:
                 "processing_time_ms": elapsed_ms,
             }
 
-    async def _run_remote(self, image_bytes: bytes, prompt_instruction: str | None = None, engine_name: str = "qwen2.5-vl") -> dict[str, Any]:
+    async def _run_remote(
+        self, image_bytes: bytes, prompt_instruction: str | None = None, engine_name: str = "qwen2.5-vl"
+    ) -> dict[str, Any]:
         start = time.monotonic()
         try:
             payload = {
@@ -325,8 +334,11 @@ class QwenVLAdapter:
                         "processing_time_ms": int((time.monotonic() - start) * 1000),
                     }
                 result["raw_text"] = raw_text
-                result.setdefault("tokens_json", [{"text": line, "confidence": 95.0} for line in raw_text.splitlines() if line.strip()])
-                result.setdefault("average_confidence", 95.0)
+                result.setdefault(
+                    "tokens_json",
+                    [{"text": line, "confidence": None} for line in raw_text.splitlines() if line.strip()],
+                )
+                result.setdefault("average_confidence", None)
             result["processing_time_ms"] = int((time.monotonic() - start) * 1000)
             return result
         except Exception:
@@ -344,7 +356,9 @@ class QwenVLAdapter:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _load_pil_image(image_bytes: bytes):  # type: ignore[return]
     """Decode raw bytes to a PIL Image for vLLM's vision pipeline."""
     import PIL.Image  # type: ignore[import]
+
     return PIL.Image.open(io.BytesIO(image_bytes)).convert("RGB")

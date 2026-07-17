@@ -1,6 +1,3 @@
-import asyncio
-from collections.abc import AsyncGenerator
-
 import aio_pika
 
 from app.shared.config.settings import settings
@@ -19,7 +16,10 @@ class RabbitMQConnection:
             settings.RABBITMQ_URL,
             timeout=30,
         )
-        self._channel = await self._connection.channel()
+        self._channel = await self._connection.channel(
+            publisher_confirms=True,
+            on_return_raises=True,
+        )
         self._channel.default_exchange = aio_pika.Exchange(
             channel=self._channel,
             name="",

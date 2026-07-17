@@ -1,4 +1,6 @@
+import secrets
 from collections.abc import AsyncGenerator
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import APIKeyHeader
@@ -15,9 +17,11 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 async def verify_api_key(api_key: str | None = Depends(_api_key_header)) -> None:
     if settings.API_AUTH_MODE == "none":
         return
-    if settings.API_AUTH_MODE == "api_key":
-        if not api_key or api_key != settings.INTERNAL_API_KEY:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    invalid_key = (
+        not settings.INTERNAL_API_KEY or not api_key or not secrets.compare_digest(api_key, settings.INTERNAL_API_KEY)
+    )
+    if settings.API_AUTH_MODE == "api_key" and invalid_key:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -25,9 +29,13 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-async def get_job_repo(session: AsyncSession = Depends(get_session)) -> AIJobPostgresRepository:
+async def get_job_repo(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AIJobPostgresRepository:
     return AIJobPostgresRepository(session)
 
 
-async def get_result_repo(session: AsyncSession = Depends(get_session)) -> ResultPostgresRepository:
+async def get_result_repo(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ResultPostgresRepository:
     return ResultPostgresRepository(session)

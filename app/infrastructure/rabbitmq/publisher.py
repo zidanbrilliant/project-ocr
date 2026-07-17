@@ -29,5 +29,6 @@ class ResultPublisher:
         await exchange.publish(
             message,
             routing_key=settings.RABBITMQ_RESULT_ROUTING_KEY,
+            mandatory=True,
         )
         logger.info("result_published", queue_id=payload.get("QUEUE_ID", "unknown"))

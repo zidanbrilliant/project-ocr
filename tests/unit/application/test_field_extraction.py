@@ -13,3 +13,16 @@ Total Bayar: Rp 7,500,000"""
     assert fields["transaction_amount"]["value"] == 7500000.0
     assert fields["transaction_date"]["value"] == "20/06/2026"
     assert fields["vendor_name"]["source_text"] == "PT Toyota Example"
+
+
+def test_resolves_multi_page_fields_with_page_provenance() -> None:
+    pages = [
+        {"raw_text": "Invoice No: INV-77", "tokens_json": []},
+        {"raw_text": "Grand Total: Rp 8.000.000", "tokens_json": []},
+    ]
+
+    fields = FieldExtractionService().extract_document_pages(pages)
+
+    assert fields["document_number"]["source_page_number"] == 1
+    assert fields["transaction_amount"]["value"] == 8000000.0
+    assert fields["transaction_amount"]["source_page_number"] == 2

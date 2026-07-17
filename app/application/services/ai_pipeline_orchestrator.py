@@ -9,8 +9,9 @@ from aio_pika.abc import AbstractIncomingMessage
 from app.application.dto.request_normalizer import normalize_request
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
-from app.domain.entities.final_result import FinalResult
+from app.application.services.result_builder import RESULT_SCHEMA_VERSION, build_result_envelope
 from app.domain.entities.ai_job import AIJob as AIJobEntity
+from app.domain.entities.final_result import FinalResult
 from app.domain.entities.normalized_request import (
     DocumentProcessingResult,
     NormalizedDocumentRequest,
@@ -91,40 +92,54 @@ class AIPipelineOrchestrator:
         self._field_extractor = field_extractor
         self._rule_evaluator = rule_evaluator
         self._confidence_scorer = confidence_scorer
+        # Global per-worker page budget. A semaphore created per document would
+        # multiply GPU work by the number of concurrent documents.
+        self._page_sem = asyncio.Semaphore(max(1, settings.MAX_INFLIGHT_PAGES))
 
-    async def process(self, payload: dict[str, Any], msg: AbstractIncomingMessage) -> None:
+    async def process(self, payload: dict[str, Any], msg: AbstractIncomingMessage) -> bool:
         normalized = normalize_request(payload)
-        job_id = uuid.uuid4()
+        existing = await self._job_repo.get_by_queue_id(normalized.queue_id)
+        job_id = existing.job_id if existing else uuid.uuid4()
         async with log_context(
-            job_id=str(job_id), queue_id=normalized.queue_id,
-            message_id=normalized.message_id, source=normalized.source_system,
+            job_id=str(job_id),
+            queue_id=normalized.queue_id,
+            message_id=normalized.message_id,
+            source=normalized.source_system,
         ):
             try:
                 await self._process_job(normalized, job_id, msg)
+                return True
             except Exception as e:
                 logger.exception("pipeline_unhandled_error")
                 await self._handle_job_error(normalized, job_id, msg, str(e))
+                return False
 
     async def _process_job(self, req: NormalizedJobRequest, job_id: uuid.UUID, msg: AbstractIncomingMessage) -> None:
         start_dt = datetime.utcnow()
-        first_doc = req.documents[0] if req.documents else None
-        await self._job_repo.save(AIJobEntity(
-            job_id=job_id,
-            queue_id=req.queue_id,
-            idempotency_key=req.idempotency_key or req.queue_id,
-            doc_no=req.business_entity_id or req.queue_id,
-            doc_type=first_doc.document_type if first_doc else "UNKNOWN",
-            doc_seq=1,
-            trans_type_cd=req.transaction_type or "UNKNOWN",
-            file_nm=first_doc.file_name if first_doc else "",
-            ai_scan_app=req.source_system,
-            path_file=first_doc.file_url if first_doc else "",
-            pv_no=req.business_entity_id,
-            pv_year=req.business_entity_year,
-            original_payload={key: value for key, value in (req.raw_payload or {}).items() if key != "_raw_body"},
-            request_datetime=start_dt,
-            start_datetime=start_dt,
-        ))
+        existing = await self._job_repo.get_by_id(job_id)
+        if existing is None:
+            first_doc = req.documents[0] if req.documents else None
+            await self._job_repo.save(
+                AIJobEntity(
+                    job_id=job_id,
+                    queue_id=req.queue_id,
+                    idempotency_key=req.idempotency_key or req.queue_id,
+                    doc_no=req.business_entity_id or req.queue_id,
+                    doc_type=first_doc.document_type if first_doc else "UNKNOWN",
+                    doc_seq=1,
+                    trans_type_cd=req.transaction_type or "UNKNOWN",
+                    file_nm=first_doc.file_name if first_doc else "",
+                    ai_scan_app=req.source_system,
+                    path_file=first_doc.file_url if first_doc else "",
+                    pv_no=req.business_entity_id,
+                    pv_year=req.business_entity_year,
+                    original_payload={
+                        key: value for key, value in (req.raw_payload or {}).items() if key != "_raw_body"
+                    },
+                    request_datetime=start_dt,
+                    start_datetime=start_dt,
+                )
+            )
         await self._audit.log(job_id, req.queue_id, "worker", "job_accepted", after={"doc_count": len(req.documents)})
 
         # ponytail: process documents in parallel with bounded concurrency
@@ -142,11 +157,15 @@ class AIPipelineOrchestrator:
                 doc_results.append(await coro)
             except Exception:
                 logger.exception("document_task_failed")
-                doc_results.append(DocumentProcessingResult(
-                    document_index=-1, external_document_id="unknown",
-                    document_type="unknown", processing_status=statuses.FAILED,
-                    processing_result=statuses.INTERNAL_ERROR,
-                ))
+                doc_results.append(
+                    DocumentProcessingResult(
+                        document_index=-1,
+                        external_document_id="unknown",
+                        document_type="unknown",
+                        processing_status=statuses.FAILED,
+                        processing_result=statuses.INTERNAL_ERROR,
+                    )
+                )
 
         # Sort by document_index for deterministic output
         doc_results.sort(key=lambda r: r.document_index)
@@ -155,9 +174,7 @@ class AIPipelineOrchestrator:
         ok_count = sum(1 for d in doc_results if d.document_result == statuses.OK)
         ng_count = sum(1 for d in doc_results if d.document_result == statuses.NG)
         error_count = sum(
-            1
-            for d in doc_results
-            if d.processing_result in (statuses.INTERNAL_ERROR, statuses.DOCUMENT_ERROR)
+            1 for d in doc_results if d.processing_result in (statuses.INTERNAL_ERROR, statuses.DOCUMENT_ERROR)
         )
         overall = statuses.OK if ok_count == len(doc_results) and error_count == 0 else statuses.NG
 
@@ -166,7 +183,7 @@ class AIPipelineOrchestrator:
 
         # Build result payload
         result_payload: dict[str, Any] = {
-            "schema_version": "0.2.0",
+            "schema_version": RESULT_SCHEMA_VERSION,
             "request": {
                 "queue_no": req.queue_id,
                 "correlation_id": req.correlation_id,
@@ -214,16 +231,26 @@ class AIPipelineOrchestrator:
             }
             result_payload["documents"].append(doc_entry)
 
+        envelope = build_result_envelope(
+            result_payload["documents"],
+            duration_ms,
+            statuses.COMPLETED if error_count == 0 else return_codes.PARTIAL_SUCCESS,
+        )
+        result_payload.update({key: value for key, value in envelope.items() if key != "documents"})
+
         # Save final result
         final_result = FinalResult(
-            job_id=job_id, queue_id=req.queue_id,
-            overall_result=overall, processing_status=statuses.COMPLETED,
-            ai_confidence=None, ai_confidence_level=None, ai_note=f"Processed {len(doc_results)} documents",
-            ai_return_status=overall, ai_return_cd=result_payload["AI_RETURN_CD"],
+            job_id=job_id,
+            queue_id=req.queue_id,
+            overall_result=overall,
+            processing_status=statuses.COMPLETED,
+            ai_confidence=None,
+            ai_confidence_level=None,
+            ai_note=f"Processed {len(doc_results)} documents",
+            ai_return_status=overall,
+            ai_return_cd=result_payload["AI_RETURN_CD"],
             ai_return_remark=(
-                f"{ok_count} OK, {ng_count} NG, {error_count} errors"
-                if error_count
-                else "All documents processed"
+                f"{ok_count} OK, {ng_count} NG, {error_count} errors" if error_count else "All documents processed"
             ),
             ai_return_confidence=None,
             internal_result_json={
@@ -235,12 +262,14 @@ class AIPipelineOrchestrator:
                     "errors": error_count,
                 },
             },
-            processing_time_ms=duration_ms, published_at=finish_dt,
+            processing_time_ms=duration_ms,
+            published_at=finish_dt,
         )
         await self._result_repo.save_final(final_result)
         await self._job_repo.update_result(job_id, overall, statuses.COMPLETED, finish_dt, duration_ms)
         await self._result_repo.save_outbox_event(
-            job_id=job_id, event_type="FINAL_RESULT",
+            job_id=job_id,
+            event_type="FINAL_RESULT",
             payload=result_payload,
             message_id=f"out-{req.queue_id}",
         )
@@ -260,8 +289,10 @@ class AIPipelineOrchestrator:
         doc_id = doc.external_document_id
         di = doc.document_index
         result = DocumentProcessingResult(
-            document_index=di, external_document_id=doc_id,
-            document_type=doc.document_type, processing_status=statuses.PROCESSING,
+            document_index=di,
+            external_document_id=doc_id,
+            document_type=doc.document_type,
+            processing_status=statuses.PROCESSING,
         )
         start = time.monotonic()
         try:
@@ -273,110 +304,115 @@ class AIPipelineOrchestrator:
             doc_info = self._validator.validate(file_content, doc.file_name)
             ext = doc_info.get("extension", "")
 
-            native_text_result: dict[str, Any] = {}
-            if ext == ".pdf":
-                native_text_result = await self._ocr_engine.run(file_content, extension=".pdf")
-
-            # Render
-            page_images: list[bytes] = []
-            if ext == ".pdf":
-                page_images = self._pdf_renderer.render(file_content)
-            elif ext in (".doc", ".docx"):
-                pdf_content = await self._word_converter.convert_to_pdf(file_content, doc.file_name)
-                page_images = self._pdf_renderer.render(pdf_content)
-            else:
-                page_images = [file_content]
-
-            preprocessed = [self._preprocessor.preprocess(img) for img in page_images]
-
-            # ponytail: local input_size override, not mutating global settings
-            raw_detections = await self._yolo.detect_batch(page_images)
-            if not raw_detections and page_images:
-                raw_detections = await self._yolo.detect_batch(page_images, input_size=960)
-
-            # Page processing: OCR + barcode with concurrency limit
-            page_sem = asyncio.Semaphore(settings.MAX_PARALLEL_PAGES)
-
-            async def process_one_page(image: bytes, pp_img: bytes, idx: int) -> tuple[dict, dict]:
-                async with page_sem:
-                    ocr = await self._ocr_engine.run(image, extension=_page_ocr_extension(ext))
-                    if not (ocr.get("raw_text") or "").strip() and pp_img != image:
-                        fallback = await self._ocr_engine.run(pp_img, extension=_page_ocr_extension(ext))
-                        if (fallback.get("raw_text") or "").strip():
-                            ocr = fallback
-                    bc = await self._barcode_chain.read(pp_img)
-                    return ocr, bc
-
-            page_tasks = [process_one_page(page_images[i], pp, i) for i, pp in enumerate(preprocessed)]
-            page_results = await asyncio.gather(*page_tasks, return_exceptions=True)
-
             page_results_list: list[PageProcessingResult] = []
             ocr_results: list[dict] = []
             barcode_results: list[dict] = []
+            raw_detections: list[dict[str, Any]] = []
+            native_pages = self._ocr_engine.extract_pdf_pages(file_content) if ext == ".pdf" else []
+            batches = (
+                self._pdf_renderer.iter_batches(file_content, settings.PAGE_MICRO_BATCH_SIZE)
+                if ext == ".pdf"
+                else iter([[file_content]])
+            )
+            quality_image: bytes | None = None
+            page_offset = 0
 
-            for i, pr in enumerate(page_results):
-                if isinstance(pr, Exception):
-                    page_results_list.append(PageProcessingResult(
-                        page_index=i, page_number=i + 1,
-                        processing_status=statuses.FAILED,
-                        processing_result=statuses.INTERNAL_ERROR,
-                        errors=[{"stage": "PAGE", "error": str(pr)}],
-                    ))
-                    ocr_results.append({
-                        "engine_name": settings.OCR_PROVIDER,
-                        "raw_text": "",
-                        "average_confidence": 0.0,
-                    })
-                    barcode_results.append({"barcode_found": False, "barcode_decoded": False})
-                else:
-                    ocr_res, bc_res = pr
+            for batch in batches:
+                if quality_image is None and batch:
+                    quality_image = batch[0]
+                batch_detections = await self._yolo.detect_batch(batch)
+                for detection in batch_detections:
+                    detection["page_number"] = page_offset + detection.get("page_number", 1)
+                raw_detections.extend(batch_detections)
+
+                async def process_one_page(
+                    image: bytes, local_index: int, batch_offset: int = page_offset
+                ) -> tuple[dict, dict]:
+                    page_index = batch_offset + local_index
+                    native = native_pages[page_index] if page_index < len(native_pages) else None
+                    async with self._page_sem:
+                        if native and native.get("text_layer_usable"):
+                            ocr = {
+                                "engine_name": "pymupdf",
+                                "raw_text": native["raw_text"],
+                                "tokens_json": native["tokens_json"],
+                                "average_confidence": None,
+                                "text_layer_detected": True,
+                            }
+                        else:
+                            ocr = await self._ocr_engine.run(image, extension=_page_ocr_extension(ext))
+                        barcode = await self._barcode_chain.read(image)
+                    return ocr, barcode
+
+                page_results = await asyncio.gather(
+                    *(process_one_page(image, index) for index, image in enumerate(batch)),
+                    return_exceptions=True,
+                )
+                for local_index, page_result in enumerate(page_results):
+                    page_index = page_offset + local_index
+                    page_number = page_index + 1
+                    if isinstance(page_result, Exception):
+                        ocr_res = {"engine_name": settings.OCR_PROVIDER, "raw_text": "", "average_confidence": None}
+                        bc_res = {"barcode_found": False, "barcode_decoded": False}
+                        error = str(page_result)
+                    else:
+                        ocr_res, bc_res = page_result
+                        error = _ocr_error(ocr_res)
                     ocr_results.append(ocr_res)
                     barcode_results.append(bc_res)
-                    ocr_err = _ocr_error(ocr_res)
-                    page_results_list.append(PageProcessingResult(
-                        page_index=i, page_number=i + 1,
-                        processing_status=statuses.FAILED if ocr_err else statuses.COMPLETED,
-                        processing_result=statuses.INTERNAL_ERROR if ocr_err else statuses.SUCCESS,
-                        ocr_raw_text=ocr_res.get("raw_text"),
-                        ocr_engine=ocr_res.get("engine_name", settings.OCR_PROVIDER),
-                        ocr_confidence=ocr_res.get("average_confidence"),
-                        text_blocks=ocr_res.get("tokens_json", []),
-                        detections=[
-                            d for d in raw_detections if d.get("page_number", 1) == i + 1
-                        ],
-                        barcodes=[bc_res],
-                        errors=[{"stage": "OCR", "error": ocr_err}] if ocr_err else [],
-                    ))
+                    native = native_pages[page_index] if page_index < len(native_pages) else {}
+                    page_results_list.append(
+                        PageProcessingResult(
+                            page_index=page_index,
+                            page_number=page_number,
+                            processing_status=statuses.FAILED if error else statuses.COMPLETED,
+                            processing_result=statuses.INTERNAL_ERROR if error else statuses.SUCCESS,
+                            page_width_pt=native.get("page_width_pt"),
+                            page_height_pt=native.get("page_height_pt"),
+                            text_layer_detected=bool(native.get("text_layer_detected")),
+                            ocr_raw_text=ocr_res.get("raw_text"),
+                            ocr_engine=ocr_res.get("engine_name", settings.OCR_PROVIDER),
+                            ocr_confidence=ocr_res.get("average_confidence"),
+                            text_blocks=ocr_res.get("tokens_json", []),
+                            detections=[d for d in raw_detections if d.get("page_number") == page_number],
+                            barcodes=[bc_res],
+                            errors=[{"stage": "PAGE", "error": error}] if error else [],
+                        )
+                    )
+                page_offset += len(batch)
 
             result.pages = page_results_list
 
             # Aggregate OCR for field extraction
             visual_text = "\n".join(r.get("raw_text", "") or "" for r in ocr_results if r.get("raw_text"))
-            all_text = _merge_ocr_text(native_text_result.get("raw_text", "") or "", visual_text)
-            ocr_errors = [] if native_text_result.get("raw_text", "").strip() else [err for err in (_ocr_error(r) for r in ocr_results) if err]
+            all_text = visual_text
+            ocr_errors = [err for err in (_ocr_error(r) for r in ocr_results) if err]
             ocr_aggregated = {
                 "engine_name": (
-                    ocr_results[0].get("engine_name", settings.OCR_PROVIDER)
-                    if ocr_results
-                    else settings.OCR_PROVIDER
+                    ocr_results[0].get("engine_name", settings.OCR_PROVIDER) if ocr_results else settings.OCR_PROVIDER
                 ),
                 "raw_text": all_text,
                 "tokens_json": [token for item in ocr_results for token in item.get("tokens_json", []) or []],
                 "average_confidence": (
-                    sum(r.get("average_confidence", 0) or 0 for r in ocr_results)
-                    / max(len(ocr_results), 1)
+                    sum(r.get("average_confidence", 0) or 0 for r in ocr_results) / max(len(ocr_results), 1)
                 ),
             }
             if ocr_errors:
                 ocr_aggregated["error"] = ocr_errors[0]
 
             # Extract fields
-            fields = ocr_aggregated.get("fields_json") or self._field_extractor.extract_from_ocr(ocr_aggregated)
-            for field in fields.values():
-                field.setdefault("source_page_number", 1)
-            result.extracted_fields = [
-                {"field_name": name, **field} for name, field in fields.items()
-            ]
+            fields = ocr_aggregated.get("fields_json") or self._field_extractor.extract_document_pages(ocr_results)
+            ocr_aggregated.update(
+                {
+                    "invoice_number": fields.get("document_number", {}).get("value"),
+                    "billing_number": fields.get("billing_number", {}).get("value"),
+                    "transaction_amount": fields.get("transaction_amount", {}).get("value"),
+                    "invoice_confidence": fields.get("document_number", {}).get("confidence"),
+                    "billing_confidence": fields.get("billing_number", {}).get("confidence"),
+                    "amount_confidence": fields.get("transaction_amount", {}).get("confidence"),
+                }
+            )
+            result.extracted_fields = [{"field_name": name, **field} for name, field in fields.items()]
             for page in result.pages:
                 page.extracted_fields = [
                     field for field in result.extracted_fields if field.get("source_page_number", 1) == page.page_number
@@ -384,31 +420,28 @@ class AIPipelineOrchestrator:
 
             # Business validation
             from app.domain.entities.ocr_result import OCRResult as OCREntity
+
             ocr_entity = OCREntity()
             ocr_entity.raw_text = ocr_aggregated.get("raw_text")
             ocr_entity.average_confidence = ocr_aggregated.get("average_confidence")
             ocr_entity.invoice_number = fields.get("document_number", {}).get("value")
             ocr_entity.transaction_amount = (
-                fields.get("transaction_amount", {}).get("value")
-                if fields.get("transaction_amount")
-                else None
+                fields.get("transaction_amount", {}).get("value") if fields.get("transaction_amount") else None
             )
 
             det_entities = [map_to_entity(d) for d in raw_detections]
             aggregated = aggregate_per_object_type(det_entities)
 
-            amount = (
-                fields.get("transaction_amount", {}).get("value")
-                if fields.get("transaction_amount")
-                else None
-            )
+            amount = fields.get("transaction_amount", {}).get("value") if fields.get("transaction_amount") else None
 
             if doc.document_type in {DN, "DELIVERY_NOTE"}:
                 validation = self._rule_evaluator.validate_delivery_note(detections=det_entities)
             else:
                 validation = self._rule_evaluator.validate_invoice(
-                    ocr=ocr_entity, detections=list(aggregated.values()),
-                    amount=amount, confidence=ocr_aggregated.get("average_confidence"),
+                    ocr=ocr_entity,
+                    detections=list(aggregated.values()),
+                    amount=amount,
+                    confidence=ocr_aggregated.get("average_confidence"),
                 )
 
             # Take first barcode
@@ -423,9 +456,11 @@ class AIPipelineOrchestrator:
 
             # Confidence
             total_conf = self._confidence_scorer.calculate(
-                ocr_result=ocr_aggregated, detections=raw_detections,
-                barcode_result=bc_final, document_info=doc_info,
-                image_bytes=preprocessed[0] if preprocessed else None,
+                ocr_result=ocr_aggregated,
+                detections=raw_detections,
+                barcode_result=bc_final,
+                document_info=doc_info,
+                image_bytes=quality_image,
             )
 
             passed = validation.passed and total_conf >= settings.CONFIDENCE_THRESHOLD
@@ -475,14 +510,16 @@ class AIPipelineOrchestrator:
             await self._job_repo.commit()
             await msg.ack()
         else:
-            await self._publisher.publish({
-                "QUEUE_ID": req.queue_id,
-                "AI_RETURN_STATUS": statuses.NG,
-                "AI_RETURN_CD": return_codes.DLQ_ERROR,
-                "AI_RETURN_REMARK": "Processing failed after retries.",
-                "AI_RETURN_CONFIDENCE": None,
-                "AI_SCAN_APP": req.source_system,
-            })
+            await self._publisher.publish(
+                {
+                    "QUEUE_ID": req.queue_id,
+                    "AI_RETURN_STATUS": statuses.NG,
+                    "AI_RETURN_CD": return_codes.DLQ_ERROR,
+                    "AI_RETURN_REMARK": "Processing failed after retries.",
+                    "AI_RETURN_CONFIDENCE": None,
+                    "AI_SCAN_APP": req.source_system,
+                }
+            )
             await self._job_repo.update_result(job_id, statuses.NG, statuses.DLQ, datetime.utcnow(), 0)
             await self._audit.log(job_id, req.queue_id, "worker", "dlq_entered")
             await self._job_repo.commit()

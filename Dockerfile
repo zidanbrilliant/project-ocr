@@ -46,3 +46,6 @@ CMD ["streamlit", "run", "scripts/upload_app.py", "--server.address=0.0.0.0", "-
 
 FROM base AS qwen
 CMD ["uvicorn", "app.interfaces.api.qwen_main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM base AS paddle
+CMD ["uvicorn", "app.interfaces.api.paddle_main:app", "--host", "0.0.0.0", "--port", "8000"]

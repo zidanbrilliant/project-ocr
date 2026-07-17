@@ -1,18 +1,21 @@
 import asyncio
 import json
 import uuid
+from contextlib import suppress
 from datetime import datetime, timedelta
-from typing import Any
 
 from aio_pika import Message
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, or_, select, update
 
 from app.infrastructure.database.models import AIOutboxEvent
 from app.infrastructure.rabbitmq.connection import RabbitMQConnection
 from app.shared.config.settings import settings
 from app.shared.constants.statuses import (
-    OUTBOX_PENDING, OUTBOX_PROCESSING, OUTBOX_PUBLISHED, OUTBOX_FAILED, OUTBOX_DLQ,
+    OUTBOX_DLQ,
+    OUTBOX_FAILED,
+    OUTBOX_PENDING,
+    OUTBOX_PROCESSING,
+    OUTBOX_PUBLISHED,
 )
 from app.shared.logging.logger import get_logger
 
@@ -35,25 +38,32 @@ class OutboxPublisher:
         self._stop.set()
         if self._task:
             self._task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("outbox_publisher_stopped")
 
     async def _publish_loop(self) -> None:
         while not self._stop.is_set():
             try:
                 await self._publish_batch()
-            except Exception as e:
+            except Exception:
                 logger.exception("outbox_loop_error")
             await asyncio.sleep(settings.OUTBOX_POLL_INTERVAL_SECONDS)
 
     async def _publish_batch(self) -> None:
         async with self._session_factory() as session:
+            stale_before = datetime.utcnow() - timedelta(seconds=settings.OUTBOX_LOCK_TIMEOUT_SECONDS)
             stmt = (
                 select(AIOutboxEvent)
-                .where(AIOutboxEvent.status.in_((OUTBOX_PENDING, OUTBOX_FAILED)))
+                .where(
+                    or_(
+                        AIOutboxEvent.status.in_((OUTBOX_PENDING, OUTBOX_FAILED)),
+                        and_(
+                            AIOutboxEvent.status == OUTBOX_PROCESSING,
+                            AIOutboxEvent.locked_at < stale_before,
+                        ),
+                    )
+                )
                 .where(AIOutboxEvent.available_at <= datetime.utcnow())
                 .order_by(AIOutboxEvent.created_at)
                 .limit(settings.OUTBOX_BATCH_SIZE)
@@ -97,6 +107,7 @@ class OutboxPublisher:
             await exchange.publish(
                 message,
                 routing_key=event.routing_key or settings.RABBITMQ_RESULT_ROUTING_KEY,
+                mandatory=True,
             )
 
             async with self._session_factory() as session:
@@ -118,10 +129,7 @@ class OutboxPublisher:
             logger.warning("outbox_publish_failed", event_id=str(event.id), error=str(e))
             async with self._session_factory() as session:
                 new_attempt = event.attempt_count + 1
-                if new_attempt >= event.max_attempts:
-                    new_status = OUTBOX_DLQ
-                else:
-                    new_status = OUTBOX_FAILED
+                new_status = OUTBOX_DLQ if new_attempt >= event.max_attempts else OUTBOX_FAILED
                 backoff = min(30 * (2 ** (new_attempt - 1)), 3600)
                 await session.execute(
                     update(AIOutboxEvent)
@@ -129,7 +137,8 @@ class OutboxPublisher:
                     .values(
                         status=new_status,
                         attempt_count=new_attempt,
-                        available_at=datetime.utcnow() if new_status == OUTBOX_DLQ
+                        available_at=datetime.utcnow()
+                        if new_status == OUTBOX_DLQ
                         else datetime.utcnow() + timedelta(seconds=backoff),
                         last_error_code=type(e).__name__,
                         last_error_message=str(e)[:500],

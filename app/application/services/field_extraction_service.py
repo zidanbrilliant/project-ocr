@@ -29,6 +29,33 @@ _VENDOR_KEYWORDS = [
 
 
 class FieldExtractionService:
+    def extract_document_pages(self, pages: list[dict[str, Any]]) -> dict[str, Any]:
+        """Resolve fields from per-page candidates without losing provenance."""
+        candidates: dict[str, list[dict[str, Any]]] = {}
+        for page_number, page in enumerate(pages, start=1):
+            page_fields = self.extract_from_ocr(page)
+            layout_fields = self.extract_layout_aware(page.get("tokens_json", []) or [])
+            for name, field in layout_fields.items():
+                page_fields.setdefault(name, field)
+            for name, field in page_fields.items():
+                candidate = dict(field)
+                candidate["source_page_number"] = page_number
+                candidates.setdefault(name, []).append(candidate)
+
+        resolved: dict[str, Any] = {}
+        for name, items in candidates.items():
+            # Prefer layout evidence, then confidence. For equal-confidence
+            # amount candidates the largest value is the safest current proxy
+            # for grand total; replace only when labeled data proves otherwise.
+            def rank(item: dict[str, Any], field_name: str = name) -> tuple[int, float, float]:
+                method_score = 1 if item.get("extraction_method") == "layout" else 0
+                confidence = float(item.get("confidence") or 0)
+                amount = float(item.get("value") or 0) if field_name == "transaction_amount" else 0
+                return method_score, confidence, amount
+
+            resolved[name] = max(items, key=rank)
+        return resolved
+
     def extract_from_ocr(self, ocr_result: dict[str, Any]) -> dict[str, Any]:
         tokens = ocr_result.get("tokens_json", [])
         text_lines = [t.get("text", "") for t in tokens if t.get("text")]
@@ -85,7 +112,9 @@ class FieldExtractionService:
             elif any(k in label_lower for k in ["total", "amount", "jumlah"]):
                 parsed = MoneyAmount.parse_rupiah(value)
                 if parsed:
-                    fields["transaction_amount"] = self._field(parsed.value, 0.85, "layout", value, currency="IDR", source_text=f"{label}: {value}")
+                    fields["transaction_amount"] = self._field(
+                        parsed.value, 0.85, "layout", value, currency="IDR", source_text=f"{label}: {value}"
+                    )
             elif any(k in label_lower for k in ["date", "tanggal", "tgl"]):
                 fields["transaction_date"] = self._field(value, 0.80, "layout", source_text=f"{label}: {value}")
             elif any(k in label_lower for k in ["vendor", "supplier", "perusahaan"]):
@@ -101,7 +130,11 @@ class FieldExtractionService:
         return None
 
     def _field(
-        self, value: Any, confidence: float, method: str, raw_value: Any | None = None,
+        self,
+        value: Any,
+        confidence: float,
+        method: str,
+        raw_value: Any | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
         return {
@@ -144,5 +177,17 @@ class FieldExtractionService:
         return pairs
 
     def _is_label(self, text: str) -> bool:
-        labels = {"invoice", "no", "number", "date", "total", "amount", "vendor", "billing", "faktur", "tanggal", "jumlah"}
+        labels = {
+            "invoice",
+            "no",
+            "number",
+            "date",
+            "total",
+            "amount",
+            "vendor",
+            "billing",
+            "faktur",
+            "tanggal",
+            "jumlah",
+        }
         return any(lb in text.lower() for lb in labels)

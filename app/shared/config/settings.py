@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     RABBITMQ_DLQ: str = "vision.ai.invoice.dlq"
 
     IMAGE_SERVER_BASE_URL: str = ""
+    IMAGE_SERVER_ALLOWED_HOSTS: str = ""
     IMAGE_SERVER_TIMEOUT_SECONDS: int = 30
 
     MAX_FILE_SIZE_MB: int = 25
@@ -45,6 +46,8 @@ class Settings(BaseSettings):
     YOLO_INPUT_SIZE: int = 640
     YOLO_CONFIDENCE_THRESHOLD: float = 0.25
     YOLO_NMS_THRESHOLD: float = 0.45
+    YOLO_HIGH_RES_INPUT_SIZE: int = 960
+    YOLO_BATCH_SIZE: int = 2
 
     OCR_PROVIDER: Literal["qwen", "paddleocr_vl"] = "paddleocr_vl"
     OCR_ENABLE_PDF_TEXT_EXTRACTION: bool = True
@@ -70,7 +73,10 @@ class Settings(BaseSettings):
     VLM_MAX_TOKENS: int = 2048
     VLM_GPU_MEMORY_UTILIZATION: float = 0.20
     QWEN_SERVICE_URL: str = ""
+    QWEN_MAX_MODEL_LEN: int = 4096
+    QWEN_MAX_NUM_SEQS: int = 1
     PADDLEOCR_VL_MODEL_DIR: str = "/mnt/models/PaddleOCR-VL-1.6"
+    PADDLEOCR_VL_SERVICE_URL: str = ""
     PADDLEOCR_VL_PIPELINE_VERSION: str = "v1.6"
     PADDLEOCR_VL_ENGINE: str = "transformers"
     PADDLEOCR_VL_DEVICE: str = "gpu"
@@ -88,6 +94,10 @@ class Settings(BaseSettings):
     MAX_PARALLEL_DOCUMENTS: int = 1
     MAX_PARALLEL_DOWNLOADS: int = 4
     MAX_PARALLEL_PAGES: int = 1
+    PAGE_MICRO_BATCH_SIZE: int = 2
+    MAX_INFLIGHT_PAGES: int = 2
+    PDF_DEFAULT_DPI: int = 200
+    PDF_FALLBACK_DPI: int = 260
 
     # --- timeouts ---
     DOCUMENT_PROCESSING_TIMEOUT_SECONDS: int = 300
@@ -106,4 +116,6 @@ class Settings(BaseSettings):
     OUTBOX_LOCK_TIMEOUT_SECONDS: int = 60
 
     # --- result ---
+
+
 settings = Settings()

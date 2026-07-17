@@ -71,41 +71,47 @@ class WorkerMain:
 
         barcode_chain = BarcodeFallbackChain(ZXingAdapter(), PyzbarAdapter(), OpenCVBarcodeAdapter())
 
-        async with async_session_factory() as session:
-            job_repo = AIJobPostgresRepository(session)
-            result_repo = ResultPostgresRepository(session)
-            audit = AuditLogPostgresRepository(session)
-            publisher = ResultPublisher(self._rmq)
-            retry = RetryHandler(self._rmq)
+        publisher = ResultPublisher(self._rmq)
+        retry = RetryHandler(self._rmq)
 
-            orchestrator = AIPipelineOrchestrator(
-                job_repo=job_repo, result_repo=result_repo, audit=audit,
-                publisher=publisher, retry_handler=retry,
-                file_client=self._file_client,
-                pdf_renderer=pdf_renderer, word_converter=word_converter,
-                preprocessor=preprocessor, ocr_engine=ocr_engine,
-                yolo=yolo, barcode_chain=barcode_chain, validator=validator,
-                field_extractor=field_extractor, rule_evaluator=rule_eval,
-                confidence_scorer=conf_scorer,
-            )
+        async def handle(payload, message) -> None:
+            # SQLAlchemy AsyncSession is not concurrency-safe. Repositories and
+            # transaction state therefore live for exactly one broker message.
+            async with async_session_factory() as session:
+                orchestrator = AIPipelineOrchestrator(
+                    job_repo=AIJobPostgresRepository(session),
+                    result_repo=ResultPostgresRepository(session),
+                    audit=AuditLogPostgresRepository(session),
+                    publisher=publisher,
+                    retry_handler=retry,
+                    file_client=self._file_client,
+                    pdf_renderer=pdf_renderer,
+                    word_converter=word_converter,
+                    preprocessor=preprocessor,
+                    ocr_engine=ocr_engine,
+                    yolo=yolo,
+                    barcode_chain=barcode_chain,
+                    validator=validator,
+                    field_extractor=field_extractor,
+                    rule_evaluator=rule_eval,
+                    confidence_scorer=conf_scorer,
+                )
+                await JobProcessor(orchestrator).handle(payload, message)
 
-            await declare_topology(self._rmq)
+        await declare_topology(self._rmq)
+        self._outbox = OutboxPublisher(self._rmq, async_session_factory)
+        await self._outbox.start()
 
-            # Start outbox publisher
-            self._outbox = OutboxPublisher(self._rmq, async_session_factory)
-            await self._outbox.start()
+        self._consumer = InvoiceRequestConsumer(self._rmq)
+        await self._consumer.start(handle)
 
-            processor = JobProcessor(orchestrator)
-            self._consumer = InvoiceRequestConsumer(self._rmq)
-            await self._consumer.start(processor.handle)
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _signal_handler)
 
-            loop = asyncio.get_event_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, _signal_handler)
-
-            logger.info("worker_ready")
-            await _shutdown.wait()
-            await self._shutdown()
+        logger.info("worker_ready")
+        await _shutdown.wait()
+        await self._shutdown()
 
     async def _shutdown(self) -> None:
         logger.info("worker_shutting_down")

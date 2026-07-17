@@ -3,8 +3,8 @@ import time
 from datetime import datetime
 from typing import Any
 
-import numpy as np
-
+from app.application.services.confidence_scoring_service import ConfidenceScoringService
+from app.application.services.field_extraction_service import FieldExtractionService
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
 from app.domain.services.remark_policy import RemarkPolicy
 from app.domain.value_objects.confidence_score import ConfidenceScore
@@ -23,9 +23,6 @@ from app.shared.config.settings import settings
 from app.shared.constants import return_codes, statuses
 from app.shared.exceptions.base import DocumentError
 from app.shared.logging.logger import get_logger, setup_logging
-from app.application.services.field_extraction_service import FieldExtractionService
-from app.application.services.confidence_scoring_service import ConfidenceScoringService
-
 
 logger = get_logger(__name__)
 
@@ -53,9 +50,7 @@ class DirectProcessor:
 
         self._yolo = YOLOAdapter()
 
-        self._barcode_chain = BarcodeFallbackChain(
-            ZXingAdapter(), PyzbarAdapter(), OpenCVBarcodeAdapter()
-        )
+        self._barcode_chain = BarcodeFallbackChain(ZXingAdapter(), PyzbarAdapter(), OpenCVBarcodeAdapter())
 
     async def warmup(self) -> None:
         logger.info("processor_warmup_start")
@@ -67,7 +62,7 @@ class DirectProcessor:
             try:
                 await eng.warmup()
             except Exception as e:
-                if name == "document_ocr":
+                if name == "document_ocr" and settings.RUN_MODE != "standalone":
                     raise
                 logger.warning(f"{name}_warmup_failed", error=str(e))
         logger.info("processor_warmup_done")
@@ -100,9 +95,21 @@ class DirectProcessor:
             page_images: list[bytes] = []
             ocr_ext = ".png" if ext == ".pdf" else ext
             pdf_text_result: dict[str, Any] = {}
+            native_pages: list[dict[str, Any]] = []
             ocr_raw: dict[str, Any] = {}
             if ext == ".pdf":
                 pdf_text_result = await self._ocr.run(file_bytes, extension=".pdf")
+                native_pages = pdf_text_result.get("pages", []) or []
+                if not native_pages and pdf_text_result.get("raw_text", "").strip():
+                    native_pages = [
+                        {
+                            "page_number": 1,
+                            "raw_text": pdf_text_result["raw_text"],
+                            "tokens_json": pdf_text_result.get("tokens_json", []),
+                            "text_layer_detected": True,
+                            "text_layer_usable": True,
+                        }
+                    ]
                 if pdf_text_result.get("raw_text", "").strip():
                     ocr_raw = dict(pdf_text_result)
                     page_images = self._pdf_renderer.render(file_bytes)
@@ -115,13 +122,9 @@ class DirectProcessor:
             if not page_images:
                 raise DocumentError("No page images generated")
 
-            preview_images = []
-            for img_bytes in page_images:
-                arr = np.frombuffer(img_bytes, dtype=np.uint8)
-                import cv2
-                preview_images.append(cv2.imdecode(arr, cv2.IMREAD_COLOR))
-
-            result["pages"] = preview_images
+            # Keep compressed bytes in session state; decoding every page here
+            # doubles memory for large PDFs and Streamlit can display bytes.
+            result["pages"] = page_images
 
             preprocessed = [self._preprocessor.preprocess(img) for img in page_images]
             n_pages = len(preprocessed or page_images)
@@ -139,7 +142,19 @@ class DirectProcessor:
             for i in range(n_pages):
                 p_img = page_images[i] if i < len(page_images) else b""
                 pp_img = preprocessed[i] if i < len(preprocessed) else None
-                ocr_task = self._ocr.run(p_img, extension=ocr_ext)
+                native = native_pages[i] if i < len(native_pages) else None
+                if native and native.get("text_layer_usable"):
+                    ocr_task = asyncio.sleep(
+                        0,
+                        result={
+                            "engine_name": "pymupdf",
+                            "raw_text": native["raw_text"],
+                            "tokens_json": native["tokens_json"],
+                            "average_confidence": None,
+                        },
+                    )
+                else:
+                    ocr_task = self._ocr.run(p_img, extension=ocr_ext)
                 bc_task = self._barcode_chain.read(pp_img or p_img)
                 page_ocr, page_bc = await asyncio.gather(ocr_task, bc_task)
                 if not (page_ocr.get("raw_text") or "").strip() and pp_img and pp_img != p_img:
@@ -152,7 +167,7 @@ class DirectProcessor:
 
                 txt = page_ocr.get("raw_text", "") or ""
                 all_texts[i] = txt
-                for t in (page_ocr.get("tokens_json", []) or []):
+                for t in page_ocr.get("tokens_json", []) or []:
                     t["page_number"] = i + 1
                     all_tokens.append(t)
                 c = page_ocr.get("average_confidence")
@@ -165,12 +180,10 @@ class DirectProcessor:
                 if not bc_raw.get("barcode_found") and page_bc.get("barcode_found"):
                     bc_raw = page_bc
 
-            ocr_raw["raw_text"] = _merge_ocr_text(pdf_text_result.get("raw_text", "") or "", "\n".join(all_texts))
+            ocr_raw["raw_text"] = "\n".join(all_texts)
             ocr_raw["tokens_json"] = all_tokens
-            ocr_raw["average_confidence"] = round(total_conf_sum / max(total_conf_count, 1), 2)
-            ocr_errors = [] if pdf_text_result.get("raw_text", "").strip() else [
-                err for err in (_ocr_error(page_ocr) for page_ocr in page_ocrs) if err
-            ]
+            ocr_raw["average_confidence"] = round(total_conf_sum / total_conf_count, 2) if total_conf_count else None
+            ocr_errors = [err for err in (_ocr_error(page_ocr) for page_ocr in page_ocrs) if err]
             if page_ocrs:
                 ocr_raw["engine_name"] = page_ocrs[0].get("engine_name", "none")
             if ocr_errors:
@@ -194,7 +207,9 @@ class DirectProcessor:
             if page_images:
                 all_detections = await self._yolo.detect_batch(page_images)
                 if not all_detections and self._yolo.load_error is None:
-                    all_detections = await self._yolo.detect_batch(page_images, input_size=960)
+                    all_detections = await self._yolo.detect_batch(
+                        page_images, input_size=settings.YOLO_HIGH_RES_INPUT_SIZE
+                    )
             else:
                 all_detections = []
 
@@ -219,12 +234,11 @@ class DirectProcessor:
             barcode_raw = bc_raw
             result["barcode"] = barcode_raw
 
-            fields = ocr_raw.get("fields_json") or self._field_extractor.extract_from_ocr(ocr_raw)
-            layout_fields = self._field_extractor.extract_layout_aware(ocr_raw.get("tokens_json", []))
-            for name, field in layout_fields.items():
-                fields.setdefault(name, field)
-            for field in fields.values():
-                field.setdefault("source_page_number", 1)
+            if hasattr(self._field_extractor, "extract_document_pages"):
+                extracted_fields = self._field_extractor.extract_document_pages(page_ocrs)
+            else:
+                extracted_fields = self._field_extractor.extract_from_ocr(ocr_raw.get("raw_text", ""))
+            fields = ocr_raw.get("fields_json") or extracted_fields
             result["fields"] = fields
 
             if self._reasoning_qwen is not None and preprocessed:
@@ -242,15 +256,24 @@ class DirectProcessor:
                 amount = fields["transaction_amount"].get("value")
 
             from app.domain.entities.ocr_result import OCRResult as OCREntity
+
             ocr_entity = OCREntity()
             ocr_entity.raw_text = ocr_raw.get("raw_text")
             ocr_entity.average_confidence = ocr_raw.get("average_confidence")
-            ocr_entity.invoice_number = ocr_raw.get("invoice_number") or (fields.get("document_number", {}).get("value"))
+            ocr_entity.invoice_number = ocr_raw.get("invoice_number") or (
+                fields.get("document_number", {}).get("value")
+            )
             ocr_entity.billing_number = ocr_raw.get("billing_number") or (fields.get("billing_number", {}).get("value"))
             ocr_entity.transaction_amount = ocr_raw.get("transaction_amount") or amount
-            ocr_entity.invoice_confidence = ocr_raw.get("invoice_confidence") or fields.get("document_number", {}).get("confidence")
-            ocr_entity.billing_confidence = ocr_raw.get("billing_confidence") or fields.get("billing_number", {}).get("confidence")
-            ocr_entity.amount_confidence = ocr_raw.get("amount_confidence") or fields.get("transaction_amount", {}).get("confidence")
+            ocr_entity.invoice_confidence = ocr_raw.get("invoice_confidence") or fields.get("document_number", {}).get(
+                "confidence"
+            )
+            ocr_entity.billing_confidence = ocr_raw.get("billing_confidence") or fields.get("billing_number", {}).get(
+                "confidence"
+            )
+            ocr_entity.amount_confidence = ocr_raw.get("amount_confidence") or fields.get("transaction_amount", {}).get(
+                "confidence"
+            )
 
             if doc_type in {"DN", "DELIVERY_NOTE"}:
                 validation = self._rule_evaluator.validate_delivery_note(detections=det_entities)
@@ -302,9 +325,7 @@ class DirectProcessor:
 
             ocr_field_avg = self._get_ocr_field_avg(ocr_entity)
             field_val = 100.0 if (ocr_entity.invoice_number and ocr_entity.transaction_amount) else 30.0
-            detection_avg = (
-                sum(d.get("confidence", 0) or 0 for d in all_detections) / max(len(all_detections), 1)
-            )
+            detection_avg = sum(d.get("confidence", 0) or 0 for d in all_detections) / max(len(all_detections), 1)
 
             result["confidence"] = {
                 "total": round(total_conf, 2),
@@ -361,6 +382,7 @@ class DirectProcessor:
 
     async def _save_to_db(self, result: dict[str, Any], file_bytes: bytes, filename: str, doc_type: str) -> None:
         import uuid as uuid_mod
+
         from app.domain.entities.ai_job import AIJob as AIJobEntity
         from app.domain.entities.final_result import FinalResult
         from app.infrastructure.database.repositories.ai_job_postgres_repository import AIJobPostgresRepository
@@ -387,74 +409,107 @@ class DirectProcessor:
                 f"streamlit-{uuid_mod.uuid4()}", doc_type, 1, filename, file_bytes.hex()[:64]
             )
             job = AIJobEntity(
-                job_id=job_id, queue_id=queue_id, idempotency_key=idempotency_key,
-                doc_no=f"STL-{uuid_mod.uuid4().hex[:8]}", doc_type=doc_type, doc_seq=1,
-                trans_type_cd="STREAMLIT", file_nm=filename, ai_scan_app="STREAMLIT",
+                job_id=job_id,
+                queue_id=queue_id,
+                idempotency_key=idempotency_key,
+                doc_no=f"STL-{uuid_mod.uuid4().hex[:8]}",
+                doc_type=doc_type,
+                doc_seq=1,
+                trans_type_cd="STREAMLIT",
+                file_nm=filename,
+                ai_scan_app="STREAMLIT",
                 path_file="local",
-                processing_status=statuses.COMPLETED, overall_result=overall,
-                request_datetime=datetime.utcnow(), start_datetime=datetime.utcnow(),
-                finish_datetime=datetime.utcnow(), duration_ms=result.get("processing_time_ms", 0),
+                processing_status=statuses.COMPLETED,
+                overall_result=overall,
+                request_datetime=datetime.utcnow(),
+                start_datetime=datetime.utcnow(),
+                finish_datetime=datetime.utcnow(),
+                duration_ms=result.get("processing_time_ms", 0),
             )
             await job_repo.save(job)
 
-            pk = await result_repo.save_document(job_id, {
-                "document_id": "DOC-001", "document_name": filename,
-                "document_type": doc_type, "file_extension": ext,
-                "file_size_bytes": doc_info.get("size_bytes"),
-                "page_count": doc_info.get("page_count", len(page_images)),
-                "readable": True, "validation_status": "VALID",
-            })
+            pk = await result_repo.save_document(
+                job_id,
+                {
+                    "document_id": "DOC-001",
+                    "document_name": filename,
+                    "document_type": doc_type,
+                    "file_extension": ext,
+                    "file_size_bytes": doc_info.get("size_bytes"),
+                    "page_count": doc_info.get("page_count", len(page_images)),
+                    "readable": True,
+                    "validation_status": "VALID",
+                },
+            )
 
             for i, po in enumerate(page_images):
-                await result_repo.save_ocr(job_id, pk, {
-                    "page_number": i + 1,
-                    "engine_name": po.get("engine_name", settings.OCR_PROVIDER),
-                    "raw_text": po.get("raw_text"),
-                    "tokens_json": po.get("tokens_json"),
-                    "average_confidence": po.get("average_confidence"),
-                    "processing_time_ms": po.get("processing_time_ms"),
-                })
+                await result_repo.save_ocr(
+                    job_id,
+                    pk,
+                    {
+                        "page_number": i + 1,
+                        "engine_name": po.get("engine_name", settings.OCR_PROVIDER),
+                        "raw_text": po.get("raw_text"),
+                        "tokens_json": po.get("tokens_json"),
+                        "average_confidence": po.get("average_confidence"),
+                        "processing_time_ms": po.get("processing_time_ms"),
+                    },
+                )
 
             for d in all_dets:
                 await result_repo.save_detection(job_id, pk, d)
 
             for i, pb in enumerate(page_bcs):
-                await result_repo.save_barcode(job_id, pk, {
-                    "page_number": i + 1,
-                    "barcode_found": pb.get("barcode_found", False),
-                    "barcode_decoded": pb.get("barcode_decoded", False),
-                    "barcode_value": pb.get("barcode_value"),
-                    "barcode_type": pb.get("barcode_type"),
-                    "barcode_confidence": pb.get("barcode_confidence"),
-                    "bounding_box": pb.get("bounding_box"),
-                    "decoder_name": pb.get("decoder_name"),
-                })
+                await result_repo.save_barcode(
+                    job_id,
+                    pk,
+                    {
+                        "page_number": i + 1,
+                        "barcode_found": pb.get("barcode_found", False),
+                        "barcode_decoded": pb.get("barcode_decoded", False),
+                        "barcode_value": pb.get("barcode_value"),
+                        "barcode_type": pb.get("barcode_type"),
+                        "barcode_confidence": pb.get("barcode_confidence"),
+                        "bounding_box": pb.get("bounding_box"),
+                        "decoder_name": pb.get("decoder_name"),
+                    },
+                )
 
             pages = []
             for i in range(len(page_images)):
                 page_dets = [d for d in all_dets if d.get("page_number", 1) == i + 1]
-                pages.append({
-                    "page_number": i + 1, "page_index": i,
-                    "ocr": {"engine": page_images[i].get("engine_name", "?"),
+                pages.append(
+                    {
+                        "page_number": i + 1,
+                        "page_index": i,
+                        "ocr": {
+                            "engine": page_images[i].get("engine_name", "?"),
                             "raw_text": page_images[i].get("raw_text"),
-                            "average_confidence": page_images[i].get("average_confidence")},
-                    "detections": page_dets,
-                    "barcode": page_bcs[i] if i < len(page_bcs) else {},
-                })
+                            "average_confidence": page_images[i].get("average_confidence"),
+                        },
+                        "detections": page_dets,
+                        "barcode": page_bcs[i] if i < len(page_bcs) else {},
+                    }
+                )
 
-            await result_repo.save_final(FinalResult(
-                job_id=job_id, queue_id=queue_id,
-                overall_result=overall, processing_status=statuses.COMPLETED,
-                ai_confidence=total_conf,
-                ai_confidence_level=ConfidenceScore.level(total_conf),
-                ai_note=remark,
-                ai_return_status=overall, ai_return_cd=return_codes.SUCCESS,
-                ai_return_remark=remark,
-                ai_return_confidence=round(total_conf) if total_conf else None,
-                internal_result_json={"pages": pages},
-                processing_time_ms=result.get("processing_time_ms", 0),
-                published_at=datetime.utcnow(),
-            ))
+            await result_repo.save_final(
+                FinalResult(
+                    job_id=job_id,
+                    queue_id=queue_id,
+                    overall_result=overall,
+                    processing_status=statuses.COMPLETED,
+                    ai_confidence=total_conf,
+                    ai_confidence_level=ConfidenceScore.level(total_conf),
+                    ai_note=remark,
+                    ai_return_status=overall,
+                    ai_return_cd=return_codes.SUCCESS,
+                    ai_return_remark=remark,
+                    ai_return_confidence=round(total_conf) if total_conf else None,
+                    internal_result_json={"pages": pages},
+                    processing_time_ms=result.get("processing_time_ms", 0),
+                    published_at=datetime.utcnow(),
+                )
+            )
 
             await session.commit()
             logger.info("db_save_ok", queue_id=queue_id)

@@ -33,6 +33,7 @@ class YOLOAdapter:
     async def warmup(self) -> None:
         try:
             from ultralytics import YOLO
+
             if not Path(settings.YOLO_MODEL_PATH).is_file():
                 raise FileNotFoundError(f"YOLO model not found: {settings.YOLO_MODEL_PATH}")
             self._model = YOLO(settings.YOLO_MODEL_PATH)
@@ -55,9 +56,20 @@ class YOLOAdapter:
         if not self._loaded:
             return []
 
+        batch_size = max(1, settings.YOLO_BATCH_SIZE)
+        if len(image_bytes_list) > batch_size:
+            detections: list[dict[str, Any]] = []
+            for offset in range(0, len(image_bytes_list), batch_size):
+                chunk = await self.detect_batch(image_bytes_list[offset : offset + batch_size], input_size)
+                for detection in chunk:
+                    detection["page_number"] += offset
+                detections.extend(chunk)
+            return detections
+
         try:
             self._last_detect_error = None
             import cv2
+
             imgs: list[np.ndarray] = []
             page_indexes: list[int] = []
             for page_idx, b in enumerate(image_bytes_list, start=1):
@@ -89,19 +101,21 @@ class YOLOAdapter:
                     cls_id = int(box.cls[0])
                     xyxy = [int(c) for c in box.xyxy[0].tolist()]
                     normalized = _normalized_box(box, xyxy, width, height)
-                    all_detections.append({
-                        "object_type": _class_name(self._class_names, cls_id),
-                        "class_id": cls_id,
-                        "page_number": page_number,
-                        "confidence": round(float(box.conf[0]) * 100, 2),
-                        "bounding_box": xyxy,
-                        "normalized_bounding_box": normalized,
-                        "page_width": width,
-                        "page_height": height,
-                        "threshold_used": settings.YOLO_CONFIDENCE_THRESHOLD,
-                        "model_name": Path(settings.YOLO_MODEL_PATH).name,
-                        "model_version": "sesi_4",
-                    })
+                    all_detections.append(
+                        {
+                            "object_type": _class_name(self._class_names, cls_id),
+                            "class_id": cls_id,
+                            "page_number": page_number,
+                            "confidence": round(float(box.conf[0]) * 100, 2),
+                            "bounding_box": xyxy,
+                            "normalized_bounding_box": normalized,
+                            "page_width": width,
+                            "page_height": height,
+                            "threshold_used": settings.YOLO_CONFIDENCE_THRESHOLD,
+                            "model_name": Path(settings.YOLO_MODEL_PATH).name,
+                            "model_version": "sesi_4",
+                        }
+                    )
             return all_detections
 
         except Exception as e:
@@ -133,4 +147,9 @@ def _normalized_box(box: Any, xyxy: list[int], width: int, height: int) -> list[
     xyxyn = getattr(box, "xyxyn", None)
     if xyxyn is not None:
         return [round(float(value), 6) for value in xyxyn[0].tolist()]
-    return [round(xyxy[0] / width, 6), round(xyxy[1] / height, 6), round(xyxy[2] / width, 6), round(xyxy[3] / height, 6)]
+    return [
+        round(xyxy[0] / width, 6),
+        round(xyxy[1] / height, 6),
+        round(xyxy[2] / width, 6),
+        round(xyxy[3] / height, 6),
+    ]

@@ -116,8 +116,18 @@ def test_parser_reads_paddle_layout_blocks_in_reading_order() -> None:
     result = adapter._parse_paddle_prediction(
         {
             "parsing_res_list": [
-                {"block_content": "Invoice: INV-10", "block_bbox": [1, 2, 30, 10], "block_label": "text", "block_order": 0},
-                {"block_content": "Total: Rp 7.500.000", "block_bbox": [1, 20, 30, 30], "block_label": "text", "block_order": 1},
+                {
+                    "block_content": "Invoice: INV-10",
+                    "block_bbox": [1, 2, 30, 10],
+                    "block_label": "text",
+                    "block_order": 0,
+                },
+                {
+                    "block_content": "Total: Rp 7.500.000",
+                    "block_bbox": [1, 20, 30, 30],
+                    "block_label": "text",
+                    "block_order": 1,
+                },
             ]
         }
     )
@@ -125,3 +135,10 @@ def test_parser_reads_paddle_layout_blocks_in_reading_order() -> None:
     assert result["raw_text"] == "Invoice: INV-10\nTotal: Rp 7.500.000"
     assert result["tokens_json"][0]["bbox"] == [1, 2, 30, 10]
     assert result["tokens_json"][1]["reading_order"] == 1
+
+
+def test_parser_does_not_invent_confidence() -> None:
+    result = adapter._parse_paddle_prediction({"parsing_res_list": [{"block_content": "Invoice INV-10"}]})
+
+    assert result["average_confidence"] is None
+    assert result["tokens_json"][0]["confidence"] is None

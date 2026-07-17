@@ -33,7 +33,7 @@ Streamlit upload
   -> Streamlit result tabs
 ```
 
-The selected OCR provider is controlled by `OCR_PROVIDER`. DGX Spark standalone Docker defaults to `paddleocr_vl` so the web UI can start without waiting for Qwen.
+The selected OCR provider is controlled by `OCR_PROVIDER`. DGX Spark standalone Docker defaults to `paddleocr_vl`; Streamlit calls the dedicated `paddle-ocr` container so only one process owns the model and GPU memory.
 
 | Provider | Value | Model path |
 |---|---|---|
@@ -69,13 +69,12 @@ RabbitMQ
   -> outbox publisher
 ```
 
-Known production hardening still required before enabling RabbitMQ in production:
+Production checks still required before enabling RabbitMQ in production:
 
 - Create real Alembic migrations for the database schema.
-- Ensure worker creates and commits `AIJob` before child result rows.
-- Remove non-JSON values from RabbitMQ payload persistence.
-- Use per-message database sessions and commits.
-- Add integration tests with RabbitMQ/PostgreSQL.
+- Run the Alembic migrations against a staging database.
+- Run integration/load tests with the real RabbitMQ, PostgreSQL, image server, and document corpus.
+- Calibrate field and YOLO thresholds using labeled production documents.
 
 ## Directory Map
 
@@ -106,7 +105,7 @@ scripts/
 The standalone Docker profile mounts `/mnt/models:/mnt/models:ro` so both model paths are visible in the container.
 
 ```bash
-docker compose --profile standalone up --build streamlit
+docker compose --profile standalone up -d --build
 ```
 
 For local non-Docker testing:

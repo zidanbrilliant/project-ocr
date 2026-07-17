@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from app.shared.config.settings import settings
 from app.shared.health_registry import register as _register_health
@@ -27,6 +30,7 @@ class PaddleOCRVLAdapter:
         self._pipeline: Any | None = None
         self._available = False
         self._load_error: str | None = None
+        self._service_url = settings.PADDLEOCR_VL_SERVICE_URL.rstrip("/")
 
     @property
     def is_available(self) -> bool:
@@ -38,6 +42,18 @@ class PaddleOCRVLAdapter:
 
     async def warmup(self) -> None:
         global _pipeline_instance
+
+        if self._service_url:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"{self._service_url}/api/v1/paddle/health")
+                    response.raise_for_status()
+                self._available = True
+                self._load_error = None
+            except Exception as exc:
+                self._available = False
+                self._load_error = f"Remote service unavailable: {exc}"
+            return
 
         if _pipeline_instance is not None:
             self._pipeline = _pipeline_instance
@@ -111,12 +127,37 @@ class PaddleOCRVLAdapter:
 
     async def run(self, image_bytes: bytes, extension: str = ".png") -> dict[str, Any]:
         start = time.monotonic()
+        if self._service_url:
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    response = await client.post(
+                        f"{self._service_url}/api/v1/paddle/run",
+                        json={
+                            "image_b64": base64.b64encode(image_bytes).decode("ascii"),
+                            "extension": extension,
+                        },
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    if not isinstance(result, dict):
+                        raise RuntimeError("Unexpected PaddleOCR response")
+                    return result
+            except Exception as exc:
+                logger.exception("paddleocr_vl_remote_inference_failed")
+                return {
+                    "engine_name": "paddleocr-vl",
+                    "raw_text": "",
+                    "tokens_json": [],
+                    "average_confidence": None,
+                    "error": f"remote_inference_error:{exc}",
+                    "processing_time_ms": int((time.monotonic() - start) * 1000),
+                }
         if not self._available or self._pipeline is None:
             return {
                 "engine_name": "paddleocr-vl",
                 "raw_text": "",
                 "tokens_json": [],
-                "average_confidence": 0.0,
+                "average_confidence": None,
                 "error": self._load_error or "model_not_loaded",
                 "processing_time_ms": 0,
             }
@@ -150,7 +191,7 @@ class PaddleOCRVLAdapter:
                 "engine_name": "paddleocr-vl",
                 "raw_text": "",
                 "tokens_json": [],
-                "average_confidence": 0.0,
+                "average_confidence": None,
                 "error": str(exc),
                 "processing_time_ms": int((time.monotonic() - start) * 1000),
             }
@@ -167,10 +208,12 @@ def _parse_paddle_prediction(prediction: Any) -> dict[str, Any]:
         _collect_text(data, tokens, lines, confidences)
 
     if any(token.get("reading_order") is not None for token in tokens):
-        tokens.sort(key=lambda token: token.get("reading_order") if isinstance(token.get("reading_order"), int) else 1_000_000)
+        tokens.sort(
+            key=lambda token: token.get("reading_order") if isinstance(token.get("reading_order"), int) else 1_000_000
+        )
         lines = [token["text"] for token in tokens]
     raw_text = "\n".join(line for line in lines if line.strip())
-    average = round(sum(confidences) / len(confidences), 2) if confidences else (95.0 if raw_text else 0.0)
+    average = round(sum(confidences) / len(confidences), 2) if confidences else None
     return {
         "engine_name": "paddleocr-vl",
         "raw_text": raw_text,
@@ -231,7 +274,8 @@ def _collect_text(data: Any, tokens: list[dict[str, Any]], lines: list[str], con
                 token["reading_order"] = data["block_order"]
             tokens.append(token)
             lines.append(text.strip())
-            confidences.append(confidence)
+            if confidence is not None:
+                confidences.append(confidence)
 
         for key, value in data.items():
             if key in {"block_content", "text", "content", "rec_text", "transcription"}:
@@ -249,7 +293,7 @@ def _plain_bbox(value: Any) -> Any:
     return value
 
 
-def _extract_confidence(data: dict[str, Any]) -> float:
+def _extract_confidence(data: dict[str, Any]) -> float | None:
     for key in ("confidence", "score", "rec_score", "prob"):
         value = data.get(key)
         if value is None:
@@ -259,4 +303,4 @@ def _extract_confidence(data: dict[str, Any]) -> float:
             return round(score * 100, 2) if score <= 1 else round(score, 2)
         except (TypeError, ValueError):
             continue
-    return 95.0
+    return None

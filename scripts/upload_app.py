@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import streamlit as st
 
+from app.application.services.result_builder import build_result_envelope
 from app.shared.config.settings import settings
 from scripts.direct_processor import DirectProcessor
 from scripts.result_adapter import normalize_pipeline_result_for_ui
@@ -22,6 +23,8 @@ DOC_TYPES = {"INV": "Invoice", "DN": "Delivery Note"}
 DEFAULT_STATE = {
     "raw_result": None,
     "ui_result": None,
+    "ui_results": [],
+    "batch_result": None,
     "processing_error": None,
     "processing_done": False,
     "processing_time_ms": None,
@@ -83,22 +86,34 @@ async def main_ui() -> None:
 
     with col_left:
         st.subheader("Upload Document")
-        uploaded = st.file_uploader("Choose PDF, JPG, or PNG", type=["pdf", "jpg", "jpeg", "png"])
+        uploaded = st.file_uploader(
+            "Choose one or more PDF, JPG, or PNG files",
+            type=["pdf", "jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+        )
         doc_type = st.selectbox("Document Type", options=list(DOC_TYPES.keys()), format_func=lambda x: DOC_TYPES[x])
 
-        if st.button("Process", type="primary", disabled=uploaded is None, use_container_width=True):
-            await _process_uploaded_file(uploaded, doc_type)
+        if st.button("Process", type="primary", disabled=not uploaded, use_container_width=True):
+            await _process_uploaded_files(uploaded, doc_type)
 
-    ui_result = st.session_state.get("ui_result")
+    ui_results = st.session_state.get("ui_results") or []
     with col_right:
         if st.session_state.get("processing_error"):
             st.error(st.session_state.processing_error)
 
-        if ui_result is None:
+        if not ui_results:
             st.info("Upload a document and click Process.")
             return
-
+        selected_document = st.selectbox(
+            "Document",
+            options=list(range(len(ui_results))),
+            format_func=lambda index: ui_results[index]["document"].get("file_name", f"Document {index + 1}"),
+        )
+        ui_result = ui_results[selected_document]
         _display_results(ui_result)
+        if len(ui_results) > 1:
+            with st.expander("Combined RabbitMQ preview"):
+                st.json(st.session_state.batch_result)
 
 
 def _render_model_status(processor: DirectProcessor) -> None:
@@ -126,41 +141,49 @@ def _render_model_status(processor: DirectProcessor) -> None:
         st.warning("YOLO: not loaded")
 
 
-async def _process_uploaded_file(uploaded, doc_type: str) -> None:
-    with st.spinner("Processing document..."):
+async def _process_uploaded_files(uploaded_files, doc_type: str) -> None:
+    with st.spinner(f"Processing {len(uploaded_files)} document(s)..."):
         try:
             processor = get_processor()
             await processor.warmup()
-
-            uploaded_bytes = uploaded.getvalue()
-            if not uploaded_bytes:
-                raise ValueError("Uploaded file is empty.")
-
-            file_hash = hashlib.sha256(uploaded_bytes).hexdigest()
-            file_name = uploaded.name
-            content_type = uploaded.type or ""
-            file_size = len(uploaded_bytes)
-
             started = time.perf_counter()
-            raw_result = await processor.process(uploaded_bytes, file_name, doc_type)
+            ui_results = []
+            hashes = []
+            for uploaded in uploaded_files:
+                uploaded_bytes = uploaded.getvalue()
+                if not uploaded_bytes:
+                    raise ValueError(f"Uploaded file is empty: {uploaded.name}")
+                hashes.append(hashlib.sha256(uploaded_bytes).hexdigest())
+                document_started = time.perf_counter()
+                raw_result = await processor.process(uploaded_bytes, uploaded.name, doc_type)
+                document_elapsed = round((time.perf_counter() - document_started) * 1000)
+                ui_results.append(
+                    normalize_pipeline_result_for_ui(
+                        raw_result=raw_result,
+                        file_name=uploaded.name,
+                        content_type=uploaded.type or "",
+                        file_size_bytes=len(uploaded_bytes),
+                        processing_time_ms=document_elapsed,
+                    )
+                )
             elapsed = round((time.perf_counter() - started) * 1000)
-
-            ui_result = normalize_pipeline_result_for_ui(
-                raw_result=raw_result,
-                file_name=file_name,
-                content_type=content_type,
-                file_size_bytes=file_size,
-                processing_time_ms=elapsed,
+            documents = [result["rabbitmq_preview"]["documents"][0] for result in ui_results]
+            batch_result = build_result_envelope(
+                documents,
+                elapsed,
+                errors=[error for result in ui_results for error in result.get("errors", [])],
             )
-
-            st.session_state.raw_result = raw_result
-            st.session_state.ui_result = ui_result
+            file_hash = hashlib.sha256("".join(hashes).encode()).hexdigest()
+            st.session_state.raw_result = None
+            st.session_state.ui_result = ui_results[0]
+            st.session_state.ui_results = ui_results
+            st.session_state.batch_result = batch_result
             st.session_state.processing_time_ms = elapsed
             st.session_state.processing_done = True
             st.session_state.processing_error = None
             st.session_state.uploaded_file_hash = file_hash
             st.session_state.selected_page_index = 0
-            _save_test_result(file_hash, ui_result["rabbitmq_preview"])
+            _save_test_result(file_hash, batch_result)
         except Exception as exc:
             st.session_state.processing_error = str(exc)
             st.session_state.processing_done = False
@@ -223,7 +246,9 @@ def _display_results(ui_result: dict) -> None:
 def _save_test_result(file_hash: str, payload: dict) -> None:
     result_dir = Path(settings.TEST_RESULT_DIR)
     result_dir.mkdir(parents=True, exist_ok=True)
-    (result_dir / f"{file_hash[:16]}.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    (result_dir / f"{file_hash[:16]}.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def _render_preview(page: dict, pages: list) -> None:

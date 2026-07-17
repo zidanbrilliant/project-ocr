@@ -1,4 +1,4 @@
-import hashlib, json
+import hashlib
 from typing import Any
 
 from aio_pika.abc import AbstractIncomingMessage
@@ -25,12 +25,14 @@ class JobProcessor:
             return
 
         # ponytail: inbox idempotency — insert or detect duplicate
-        raw_body = message.body.decode() if hasattr(message.body, 'decode') else str(message.body)
+        raw_body = message.body.decode() if hasattr(message.body, "decode") else str(message.body)
         payload_hash = hashlib.sha256(raw_body.encode()).hexdigest()
 
         async with async_session_factory() as session:
             existing = await session.execute(
-                __import__('sqlalchemy').select(AIInboxMessage).where(
+                __import__("sqlalchemy")
+                .select(AIInboxMessage)
+                .where(
                     AIInboxMessage.source_system == normalized.source_system,
                     AIInboxMessage.message_id == normalized.message_id,
                 )
@@ -51,17 +53,17 @@ class JobProcessor:
                     source_system=normalized.source_system,
                     payload_hash=payload_hash,
                     payload=payload,
-                    processing_status="RECEIVED",
+                    processing_status="PROCESSING",
                 )
                 session.add(inbox_row)
             else:
                 inbox_row.processing_status = "PROCESSING"
             await session.commit()
 
-        await self._orchestrator.process(payload, message)
+        completed = await self._orchestrator.process(payload, message)
 
         async with async_session_factory() as session:
             row = await session.get(AIInboxMessage, inbox_row.id)
             if row:
-                row.processing_status = "PROCESSED"
+                row.processing_status = "PROCESSED" if completed else "RETRY_SCHEDULED"
                 await session.commit()
