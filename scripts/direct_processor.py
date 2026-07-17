@@ -229,11 +229,7 @@ class DirectProcessor:
             barcode_raw = bc_raw
             result["barcode"] = barcode_raw
 
-            if hasattr(self._field_extractor, "extract_document_pages"):
-                extracted_fields = self._field_extractor.extract_document_pages(page_ocrs)
-            else:
-                extracted_fields = self._field_extractor.extract_from_ocr(ocr_raw.get("raw_text", ""))
-            fields = ocr_raw.get("fields_json") or extracted_fields
+            fields = self._field_extractor.extract_document_pages(page_ocrs, doc_type)
             result["fields"] = fields
 
             result["reasoning"] = {"enabled": False, "engine": "deterministic"}

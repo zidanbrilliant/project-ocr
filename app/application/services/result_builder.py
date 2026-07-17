@@ -71,7 +71,7 @@ def build_result_payload(
         )
 
     document = {
-        "document_id": "TEST-DOC-001",
+        "document_id": raw_result.get("document_id", "TEST-DOC-001"),
         "document_name": file_name,
         "document_type": raw_result.get("doc_type", "UNKNOWN"),
         "processing_status": "COMPLETED" if raw_result.get("status") != "error" else "FAILED",
@@ -190,8 +190,12 @@ def _field_entries(fields: dict[str, Any], page_number: int | None) -> list[dict
                 "raw_value": field.get("raw_value"),
                 "data_type": "number" if isinstance(field.get("value"), (int, float)) else "string",
                 "confidence": _confidence(field.get("confidence")),
+                "status": field.get("status", "FOUND"),
+                "source_page_index": field.get("source_page_index", source_page - 1),
                 "source_page_number": source_page,
                 "source_text": field.get("source_text"),
+                "source_label": field.get("source_label"),
+                "source_bbox": field.get("source_bbox"),
                 "extraction_method": field.get("extraction_method", field.get("method")),
             }
         )

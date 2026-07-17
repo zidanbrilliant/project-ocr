@@ -401,7 +401,7 @@ class AIPipelineOrchestrator:
                 ocr_aggregated["error"] = ocr_errors[0]
 
             # Extract fields
-            fields = ocr_aggregated.get("fields_json") or self._field_extractor.extract_document_pages(ocr_results)
+            fields = self._field_extractor.extract_document_pages(ocr_results, doc.document_type)
             ocr_aggregated.update(
                 {
                     "invoice_number": fields.get("document_number", {}).get("value"),
