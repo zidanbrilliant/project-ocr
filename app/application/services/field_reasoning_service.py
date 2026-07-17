@@ -45,7 +45,11 @@ class FieldReasoningService:
         selected = {
             name: items
             for name, items in candidates.items()
-            if len(items) > 1 and (fields.get(name, {}).get("status") == "AMBIGUOUS" or fields[name].get("confidence", 0) < settings.REASONING_CONFIDENCE_THRESHOLD)
+            if len(items) > 1 and (
+                fields.get(name, {}).get("status") == "AMBIGUOUS"
+                or fields[name].get("confidence", 0) < settings.REASONING_CONFIDENCE_THRESHOLD
+                or fields[name].get("validation") == "UNVERIFIED"
+            )
         }
         if not settings.REASONING_ENABLED or not selected:
             return fields, {"enabled": settings.REASONING_ENABLED, "used": False, "engine": "deterministic"}

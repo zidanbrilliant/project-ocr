@@ -115,7 +115,7 @@ class QwenReasoningAdapter:
         if hasattr(tokenizer, "apply_chat_template"):
             text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         else:
-            text = prompt
+            text = _prompt(request, mode)
         inputs = tokenizer(text, return_tensors="pt").to(model.device)
         with torch.inference_mode():
             output = model.generate(

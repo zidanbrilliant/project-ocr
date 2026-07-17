@@ -69,6 +69,25 @@ def test_reads_inline_faktur_penjualan_number() -> None:
     assert fields["document_number"]["value"] == "2023/AR-SAD000012678"
 
 
+def test_extracts_invoice_total_from_nemotron_table_text() -> None:
+    text = """FAKTUR PENJUALAN: NO. 2023/AR-SAD000012678
+No\tKode Barang\tHarga Jual
+1\tA-TYI06-PK020.0\t1.366.800,00
+Jumlah Harga Jual\t60.334.000,00
+Dikurangi Potongan Harga\t0,00
+Dasar Pengenaan Pajak\t60.334.000,00
+PPN ( 11 %)\t6.636.740,00
+TOTAL\t66.970.740,00"""
+
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": text})
+
+    assert fields["document_number"]["value"] == "2023/AR-SAD000012678"
+    assert fields["transaction_amount"]["value"] == 66_970_740.0
+    assert fields["transaction_amount"]["raw_value"] == "66.970.740,00"
+    assert fields["transaction_amount"]["source_label"] == "total"
+    assert fields["transaction_amount"]["validation"] == "RECONCILED_DPP_PLUS_TAX_MINUS_DISCOUNT"
+
+
 def test_preserves_block_evidence_for_each_field() -> None:
     fields = FieldExtractionService().extract_from_ocr(
         {"tokens_json": [{"text": "Grand Total: Rp 7.500.000", "bbox": [1, 1, 40, 10], "block_id": "p1-b7"}]}
