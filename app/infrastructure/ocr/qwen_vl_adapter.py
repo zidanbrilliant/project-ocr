@@ -46,7 +46,7 @@ import sys as _sys
 import types as _types
 
 for _mod in ("torchcodec", "torchcodec.decoders", "torchcodec.decoders._core",
-             "torchcodec._internally_replaced_utils", "torchaudio"):
+            "torchcodec._internally_replaced_utils", "torchaudio"):
     if _mod not in _sys.modules:
         _m = _types.ModuleType(_mod)
         _m.__spec__ = importlib.machinery.ModuleSpec(_mod, loader=None)
@@ -165,7 +165,7 @@ class QwenVLAdapter:
         except ImportError as exc:
             self._load_error = f"ImportError: {str(exc)}"
             _register_health("qwen2.5-vl", available=False, error=self._load_error,
-                             hint="Run `pip install vllm>=0.7.2`")
+                            hint="Run `pip install vllm>=0.7.2`")
             logger.warning(
                 "qwen_vl_not_available",
                 error=str(exc),

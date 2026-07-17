@@ -1,11 +1,12 @@
 import uuid
+from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import urlparse
 
 from app.domain.entities.normalized_request import (
     NormalizedDocumentRequest,
     NormalizedJobRequest,
 )
-from app.shared.constants.doc_types import ALL_TYPES
 from app.shared.utils.hash import build_idempotency_key
 from app.shared.utils.id_generator import generate_queue_id
 
@@ -50,7 +51,7 @@ def normalize_legacy_request(payload: dict[str, Any]) -> NormalizedJobRequest:
 
 def normalize_batch_request(payload: dict[str, Any]) -> NormalizedJobRequest:
     """Convert batch multi-document format to NormalizedJobRequest."""
-    context = payload.get("business_context", payload.get("context", {}))
+    context = payload.get("business_context", payload.get("context", {})) or {}
     queue_id = payload.get("queue_no", payload.get("QUEUE_ID")) or generate_queue_id()
     message_id = payload.get("message_id", payload.get("MESSAGE_ID", f"MSG-{uuid.uuid4().hex[:12]}"))
 
@@ -58,14 +59,16 @@ def normalize_batch_request(payload: dict[str, Any]) -> NormalizedJobRequest:
     documents: list[NormalizedDocumentRequest] = []
     for i, d in enumerate(raw_docs):
         file_info = d.get("file", d)
+        file_url = file_info.get("file_url", file_info.get("attachment_url", ""))
+        file_name = file_info.get("file_name") or _filename_from_url(file_url)
         doc = NormalizedDocumentRequest(
             external_document_id=d.get("document_id", f"DOC-{i+1:03d}"),
             document_index=d.get("document_index", i),
             document_type=d.get("document_type", ""),
             document_category=d.get("document_category", "MAIN_DOCUMENT"),
-            file_name=file_info.get("file_name", ""),
-            file_url=file_info.get("file_url", file_info.get("attachment_url", "")),
-            mime_type=file_info.get("mime_type", _guess_mime(file_info.get("file_name", ""))),
+            file_name=file_name,
+            file_url=file_url,
+            mime_type=file_info.get("mime_type", _guess_mime(file_name)),
             checksum_sha256=file_info.get("checksum_sha256"),
             metadata=d.get("metadata", {}),
         )
@@ -81,13 +84,13 @@ def normalize_batch_request(payload: dict[str, Any]) -> NormalizedJobRequest:
         queue_id=queue_id,
         correlation_id=payload.get("correlation_id", queue_id),
         trace_id=payload.get("trace_id"),
-        source_system=payload.get("source_system", "UNKNOWN"),
+        source_system=payload.get("source_system", payload.get("request_source", "ELVIS")),
         request_schema_version=payload.get("request_schema_version", "1.1"),
         idempotency_key=idempotency_key,
-        business_entity_type=context.get("entity_type"),
-        business_entity_id=context.get("entity_id"),
-        business_entity_year=context.get("entity_year"),
-        transaction_type=context.get("transaction_type"),
+        business_entity_type=context.get("entity_type", "PAYMENT_VOUCHER"),
+        business_entity_id=context.get("entity_id", payload.get("pv_no")),
+        business_entity_year=context.get("entity_year", payload.get("pv_year")),
+        transaction_type=context.get("transaction_type", payload.get("transaction_type")),
         documents=documents,
         processing_options=payload.get("processing_options", {"output_detail_level": "FULL"}),
         business_context=context,
@@ -115,3 +118,7 @@ def _guess_mime(filename: str) -> str:
         "doc": "application/msword",
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }.get(ext, "application/octet-stream")
+
+
+def _filename_from_url(url: str) -> str:
+    return PurePosixPath(urlparse(url).path).name

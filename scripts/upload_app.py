@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import sys
 import time
 from pathlib import Path
@@ -159,6 +160,7 @@ async def _process_uploaded_file(uploaded, doc_type: str) -> None:
             st.session_state.processing_error = None
             st.session_state.uploaded_file_hash = file_hash
             st.session_state.selected_page_index = 0
+            _save_test_result(file_hash, ui_result["rabbitmq_preview"])
         except Exception as exc:
             st.session_state.processing_error = str(exc)
             st.session_state.processing_done = False
@@ -194,8 +196,8 @@ def _display_results(ui_result: dict) -> None:
         f"{doc.get('size_kb', 0)} KB"
     )
 
-    preview_tab, ocr_tab, detection_tab, fields_tab, confidence_tab = st.tabs(
-        ["Preview", "OCR", "Detection", "Fields", "Confidence"]
+    preview_tab, ocr_tab, detection_tab, fields_tab, confidence_tab, json_tab = st.tabs(
+        ["Preview", "OCR", "Detection", "Fields", "Confidence", "Result JSON"]
     )
 
     with preview_tab:
@@ -208,6 +210,20 @@ def _display_results(ui_result: dict) -> None:
         _render_fields(selected_page)
     with confidence_tab:
         _render_confidence(ui_result, selected_page)
+    with json_tab:
+        st.json(ui_result["rabbitmq_preview"])
+        st.download_button(
+            "Download result JSON",
+            data=json.dumps(ui_result["rabbitmq_preview"], indent=2, ensure_ascii=False),
+            file_name="vision-ai-result.json",
+            mime="application/json",
+        )
+
+
+def _save_test_result(file_hash: str, payload: dict) -> None:
+    result_dir = Path(settings.TEST_RESULT_DIR)
+    result_dir.mkdir(parents=True, exist_ok=True)
+    (result_dir / f"{file_hash[:16]}.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _render_preview(page: dict, pages: list) -> None:

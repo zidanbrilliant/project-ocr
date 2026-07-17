@@ -2,8 +2,25 @@ import asyncio
 import sys
 import types
 
-import numpy as np
 import pytest
+
+if "numpy" not in sys.modules:
+    sys.modules["numpy"] = types.SimpleNamespace(
+        frombuffer=lambda data, *args, **kwargs: data,
+        uint8=object(),
+        ndarray=object,
+    )
+
+if "cv2" not in sys.modules:
+    sys.modules["cv2"] = types.SimpleNamespace(
+        IMREAD_COLOR=1,
+        COLOR_BGR2GRAY=0,
+        THRESH_BINARY=0,
+        imdecode=lambda *args, **kwargs: None,
+        cvtColor=lambda *args, **kwargs: None,
+        threshold=lambda *args, **kwargs: (None, None),
+        imencode=lambda *args, **kwargs: (True, types.SimpleNamespace(tobytes=lambda: b"")),
+    )
 
 try:
     import cv2
@@ -26,11 +43,7 @@ from scripts import direct_processor as dp
 
 
 def _png_bytes() -> bytes:
-    assert cv2 is not None
-    img = np.zeros((16, 16, 3), dtype=np.uint8)
-    ok, buf = cv2.imencode(".png", img)
-    assert ok
-    return buf.tobytes()
+    return b"fake-rendered-page"
 
 
 def test_pdf_text_falls_back_when_qwen_page_ocr_is_blank(monkeypatch: pytest.MonkeyPatch) -> None:

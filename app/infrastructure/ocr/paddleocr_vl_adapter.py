@@ -166,6 +166,9 @@ def _parse_paddle_prediction(prediction: Any) -> dict[str, Any]:
         data = _to_plain_data(item)
         _collect_text(data, tokens, lines, confidences)
 
+    if any(token.get("reading_order") is not None for token in tokens):
+        tokens.sort(key=lambda token: token.get("reading_order") if isinstance(token.get("reading_order"), int) else 1_000_000)
+        lines = [token["text"] for token in tokens]
     raw_text = "\n".join(line for line in lines if line.strip())
     average = round(sum(confidences) / len(confidences), 2) if confidences else (95.0 if raw_text else 0.0)
     return {
@@ -206,29 +209,44 @@ def _prediction_items(prediction: Any) -> list[Any]:
 
 def _collect_text(data: Any, tokens: list[dict[str, Any]], lines: list[str], confidences: list[float]) -> None:
     if isinstance(data, dict):
-        text = data.get("text") or data.get("content") or data.get("rec_text") or data.get("transcription")
+        # PaddleOCR-VL puts reading-order text in ``parsing_res_list[].block_content``.
+        # Do not fall back to traversing arbitrary strings: that leaks model settings
+        # and image paths into the document text.
+        text = (
+            data.get("block_content")
+            or data.get("text")
+            or data.get("content")
+            or data.get("rec_text")
+            or data.get("transcription")
+        )
         if isinstance(text, str) and text.strip():
             confidence = _extract_confidence(data)
             token = {"text": text.strip(), "confidence": confidence}
-            bbox = data.get("bbox") or data.get("box") or data.get("coordinate")
+            bbox = data.get("block_bbox") or data.get("bbox") or data.get("box") or data.get("coordinate")
             if bbox is not None:
-                token["bbox"] = bbox
+                token["bbox"] = _plain_bbox(bbox)
+            if data.get("block_label"):
+                token["label"] = data["block_label"]
+            if data.get("block_order") is not None:
+                token["reading_order"] = data["block_order"]
             tokens.append(token)
             lines.append(text.strip())
             confidences.append(confidence)
 
-        for value in data.values():
+        for key, value in data.items():
+            if key in {"block_content", "text", "content", "rec_text", "transcription"}:
+                continue
             if isinstance(value, (dict, list)):
                 _collect_text(value, tokens, lines, confidences)
     elif isinstance(data, list):
         for value in data:
             _collect_text(value, tokens, lines, confidences)
-    elif isinstance(data, str) and data.strip():
-        stripped = data.strip()
-        if len(stripped) > 1:
-            tokens.append({"text": stripped, "confidence": 95.0})
-            lines.append(stripped)
-            confidences.append(95.0)
+
+
+def _plain_bbox(value: Any) -> Any:
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    return value
 
 
 def _extract_confidence(data: dict[str, Any]) -> float:

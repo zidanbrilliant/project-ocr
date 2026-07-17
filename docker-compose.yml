@@ -13,7 +13,7 @@ services:
       ENABLE_DATABASE: "false"
       ENABLE_RABBITMQ: "false"
       OCR_PROVIDER: ${OCR_PROVIDER:-paddleocr_vl}
-      ENABLE_QWEN_REASONING: "false"
+      ENABLE_QWEN_REASONING: ${ENABLE_QWEN_REASONING:-false}
       QWEN_SERVICE_URL: ${QWEN_SERVICE_URL:-http://qwen:8000}
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       VLLM_WORKER_MULTIPROC_METHOD: spawn
@@ -25,6 +25,7 @@ services:
     volumes:
       - ./models:/app/models:ro
       - /mnt/models:/mnt/models:ro
+      - ./artifacts/results:/app/artifacts/results
     runtime: ${DOCKER_RUNTIME:-nvidia}
     deploy:
       resources:
@@ -86,6 +87,8 @@ services:
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/vision_ai
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,6 +106,8 @@ services:
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/vision_ai
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     depends_on:
       postgres:
         condition: service_healthy

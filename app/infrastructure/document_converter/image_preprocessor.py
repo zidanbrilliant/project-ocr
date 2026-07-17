@@ -12,11 +12,10 @@ logger = get_logger(__name__)
 
 class ImagePreprocessor:
     def preprocess(self, image_bytes: bytes) -> bytes:
-        img = self._load_image(image_bytes)
-        img = self._denoise(img)
-        img = self._sharpen(img)
-        img = self._deskew(img)
-        return self._to_bytes(img)
+        # OCR-VL and YOLO already perform their own normalization. Re-encoding,
+        # denoising and global deskew changed the model input distribution and
+        # consumed CPU without improving the common path.
+        return image_bytes
 
     def preprocess_barcode(self, image_bytes: bytes) -> bytes:
         img = self._load_image(image_bytes)

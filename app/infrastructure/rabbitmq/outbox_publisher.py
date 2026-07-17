@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from aio_pika import Message
@@ -53,7 +53,7 @@ class OutboxPublisher:
         async with self._session_factory() as session:
             stmt = (
                 select(AIOutboxEvent)
-                .where(AIOutboxEvent.status == OUTBOX_PENDING)
+                .where(AIOutboxEvent.status.in_((OUTBOX_PENDING, OUTBOX_FAILED)))
                 .where(AIOutboxEvent.available_at <= datetime.utcnow())
                 .order_by(AIOutboxEvent.created_at)
                 .limit(settings.OUTBOX_BATCH_SIZE)
@@ -130,7 +130,7 @@ class OutboxPublisher:
                         status=new_status,
                         attempt_count=new_attempt,
                         available_at=datetime.utcnow() if new_status == OUTBOX_DLQ
-                        else datetime.utcnow().timestamp() + backoff,
+                        else datetime.utcnow() + timedelta(seconds=backoff),
                         last_error_code=type(e).__name__,
                         last_error_message=str(e)[:500],
                         updated_at=datetime.utcnow(),

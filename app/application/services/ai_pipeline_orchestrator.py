@@ -10,6 +10,7 @@ from app.application.dto.request_normalizer import normalize_request
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
 from app.domain.entities.final_result import FinalResult
+from app.domain.entities.ai_job import AIJob as AIJobEntity
 from app.domain.entities.normalized_request import (
     DocumentProcessingResult,
     NormalizedDocumentRequest,
@@ -106,6 +107,24 @@ class AIPipelineOrchestrator:
 
     async def _process_job(self, req: NormalizedJobRequest, job_id: uuid.UUID, msg: AbstractIncomingMessage) -> None:
         start_dt = datetime.utcnow()
+        first_doc = req.documents[0] if req.documents else None
+        await self._job_repo.save(AIJobEntity(
+            job_id=job_id,
+            queue_id=req.queue_id,
+            idempotency_key=req.idempotency_key or req.queue_id,
+            doc_no=req.business_entity_id or req.queue_id,
+            doc_type=first_doc.document_type if first_doc else "UNKNOWN",
+            doc_seq=1,
+            trans_type_cd=req.transaction_type or "UNKNOWN",
+            file_nm=first_doc.file_name if first_doc else "",
+            ai_scan_app=req.source_system,
+            path_file=first_doc.file_url if first_doc else "",
+            pv_no=req.business_entity_id,
+            pv_year=req.business_entity_year,
+            original_payload={key: value for key, value in (req.raw_payload or {}).items() if key != "_raw_body"},
+            request_datetime=start_dt,
+            start_datetime=start_dt,
+        ))
         await self._audit.log(job_id, req.queue_id, "worker", "job_accepted", after={"doc_count": len(req.documents)})
 
         # ponytail: process documents in parallel with bounded concurrency
@@ -147,6 +166,14 @@ class AIPipelineOrchestrator:
 
         # Build result payload
         result_payload: dict[str, Any] = {
+            "schema_version": "0.2.0",
+            "request": {
+                "queue_no": req.queue_id,
+                "correlation_id": req.correlation_id,
+                "pv_no": req.business_entity_id,
+                "pv_year": req.business_entity_year,
+                "transaction_type": req.transaction_type,
+            },
             "QUEUE_ID": req.queue_id,
             "AI_RETURN_STATUS": overall,
             "AI_RETURN_CD": return_codes.SUCCESS if error_count == 0 else return_codes.PARTIAL_SUCCESS,
@@ -163,6 +190,9 @@ class AIPipelineOrchestrator:
                 "processing_result": dr.processing_result,
                 "document_result": dr.document_result,
                 "confidence": dr.confidence,
+                "fields": dr.extracted_fields,
+                "detections": dr.detections,
+                "validation": dr.validations,
                 "pages": [
                     {
                         "page_index": p.page_index,
@@ -172,8 +202,10 @@ class AIPipelineOrchestrator:
                         "ocr_raw_text": p.ocr_raw_text,
                         "ocr_engine": p.ocr_engine,
                         "ocr_confidence": p.ocr_confidence,
+                        "text_blocks": p.text_blocks,
                         "detections": p.detections,
                         "barcodes": p.barcodes,
+                        "extracted_fields": p.extracted_fields,
                         "errors": p.errors,
                     }
                     for p in dr.pages
@@ -212,6 +244,7 @@ class AIPipelineOrchestrator:
             payload=result_payload,
             message_id=f"out-{req.queue_id}",
         )
+        await self._job_repo.commit()
 
         await self._audit.log(job_id, req.queue_id, "worker", "result_published", after={"overall": overall})
         await msg.ack()
@@ -240,6 +273,10 @@ class AIPipelineOrchestrator:
             doc_info = self._validator.validate(file_content, doc.file_name)
             ext = doc_info.get("extension", "")
 
+            native_text_result: dict[str, Any] = {}
+            if ext == ".pdf":
+                native_text_result = await self._ocr_engine.run(file_content, extension=".pdf")
+
             # Render
             page_images: list[bytes] = []
             if ext == ".pdf":
@@ -253,20 +290,24 @@ class AIPipelineOrchestrator:
             preprocessed = [self._preprocessor.preprocess(img) for img in page_images]
 
             # ponytail: local input_size override, not mutating global settings
-            raw_detections = await self._yolo.detect_batch(preprocessed)
-            if not raw_detections and preprocessed:
-                raw_detections = await self._yolo.detect_batch(preprocessed, input_size=960)
+            raw_detections = await self._yolo.detect_batch(page_images)
+            if not raw_detections and page_images:
+                raw_detections = await self._yolo.detect_batch(page_images, input_size=960)
 
             # Page processing: OCR + barcode with concurrency limit
             page_sem = asyncio.Semaphore(settings.MAX_PARALLEL_PAGES)
 
-            async def process_one_page(pp_img: bytes, idx: int) -> tuple[dict, dict]:
+            async def process_one_page(image: bytes, pp_img: bytes, idx: int) -> tuple[dict, dict]:
                 async with page_sem:
-                    ocr = await self._ocr_engine.run(pp_img, extension=_page_ocr_extension(ext))
+                    ocr = await self._ocr_engine.run(image, extension=_page_ocr_extension(ext))
+                    if not (ocr.get("raw_text") or "").strip() and pp_img != image:
+                        fallback = await self._ocr_engine.run(pp_img, extension=_page_ocr_extension(ext))
+                        if (fallback.get("raw_text") or "").strip():
+                            ocr = fallback
                     bc = await self._barcode_chain.read(pp_img)
                     return ocr, bc
 
-            page_tasks = [process_one_page(pp, i) for i, pp in enumerate(preprocessed)]
+            page_tasks = [process_one_page(page_images[i], pp, i) for i, pp in enumerate(preprocessed)]
             page_results = await asyncio.gather(*page_tasks, return_exceptions=True)
 
             page_results_list: list[PageProcessingResult] = []
@@ -299,6 +340,7 @@ class AIPipelineOrchestrator:
                         ocr_raw_text=ocr_res.get("raw_text"),
                         ocr_engine=ocr_res.get("engine_name", settings.OCR_PROVIDER),
                         ocr_confidence=ocr_res.get("average_confidence"),
+                        text_blocks=ocr_res.get("tokens_json", []),
                         detections=[
                             d for d in raw_detections if d.get("page_number", 1) == i + 1
                         ],
@@ -309,8 +351,9 @@ class AIPipelineOrchestrator:
             result.pages = page_results_list
 
             # Aggregate OCR for field extraction
-            all_text = "\n".join(r.get("raw_text", "") or "" for r in ocr_results if r.get("raw_text"))
-            ocr_errors = [err for err in (_ocr_error(r) for r in ocr_results) if err]
+            visual_text = "\n".join(r.get("raw_text", "") or "" for r in ocr_results if r.get("raw_text"))
+            all_text = _merge_ocr_text(native_text_result.get("raw_text", "") or "", visual_text)
+            ocr_errors = [] if native_text_result.get("raw_text", "").strip() else [err for err in (_ocr_error(r) for r in ocr_results) if err]
             ocr_aggregated = {
                 "engine_name": (
                     ocr_results[0].get("engine_name", settings.OCR_PROVIDER)
@@ -318,6 +361,7 @@ class AIPipelineOrchestrator:
                     else settings.OCR_PROVIDER
                 ),
                 "raw_text": all_text,
+                "tokens_json": [token for item in ocr_results for token in item.get("tokens_json", []) or []],
                 "average_confidence": (
                     sum(r.get("average_confidence", 0) or 0 for r in ocr_results)
                     / max(len(ocr_results), 1)
@@ -328,6 +372,15 @@ class AIPipelineOrchestrator:
 
             # Extract fields
             fields = ocr_aggregated.get("fields_json") or self._field_extractor.extract_from_ocr(ocr_aggregated)
+            for field in fields.values():
+                field.setdefault("source_page_number", 1)
+            result.extracted_fields = [
+                {"field_name": name, **field} for name, field in fields.items()
+            ]
+            for page in result.pages:
+                page.extracted_fields = [
+                    field for field in result.extracted_fields if field.get("source_page_number", 1) == page.page_number
+                ]
 
             # Business validation
             from app.domain.entities.ocr_result import OCRResult as OCREntity
@@ -350,8 +403,8 @@ class AIPipelineOrchestrator:
                 else None
             )
 
-            if doc.document_type == DN:
-                validation = self._rule_evaluator.validate_delivery_note(detections=list(aggregated.values()))
+            if doc.document_type in {DN, "DELIVERY_NOTE"}:
+                validation = self._rule_evaluator.validate_delivery_note(detections=det_entities)
             else:
                 validation = self._rule_evaluator.validate_invoice(
                     ocr=ocr_entity, detections=list(aggregated.values()),
@@ -378,6 +431,15 @@ class AIPipelineOrchestrator:
             passed = validation.passed and total_conf >= settings.CONFIDENCE_THRESHOLD
             doc_result = statuses.OK if passed else statuses.NG
             result.document_result = doc_result
+            result.detections = raw_detections
+            result.detections_aggregated = {
+                name: {"result": item.result, "confidence": item.confidence, "bounding_box": item.bounding_box}
+                for name, item in aggregated.items()
+            }
+            result.validations = [
+                {"rule_id": rule.rule_id, "rule_name": rule.rule_name, "result": "FAILED", "reason": rule.message}
+                for rule in validation.failed_rules
+            ]
             result.confidence = total_conf
             result.processing_status = statuses.FAILED if ocr_errors else statuses.COMPLETED
             result.processing_result = statuses.INTERNAL_ERROR if ocr_errors else statuses.SUCCESS
@@ -410,6 +472,7 @@ class AIPipelineOrchestrator:
             await self._job_repo.increment_retry(job_id)
             await self._job_repo.update_status(job_id, statuses.FAILED_INTERNAL_ERROR)
             await self._audit.log(job_id, req.queue_id, "worker", "retry_scheduled", after={"retry": retry_count + 1})
+            await self._job_repo.commit()
             await msg.ack()
         else:
             await self._publisher.publish({
@@ -422,5 +485,18 @@ class AIPipelineOrchestrator:
             })
             await self._job_repo.update_result(job_id, statuses.NG, statuses.DLQ, datetime.utcnow(), 0)
             await self._audit.log(job_id, req.queue_id, "worker", "dlq_entered")
+            await self._job_repo.commit()
             # ponytail: nack with requeue=false so RabbitMQ routes to DLX→DLQ
             await msg.nack(requeue=False)
+
+
+def _merge_ocr_text(native_text: str, visual_text: str) -> str:
+    native = native_text.strip()
+    visual = visual_text.strip()
+    if not native:
+        return visual
+    if not visual or visual in native:
+        return native
+    if native in visual:
+        return visual
+    return f"{native}\n\n{visual}"

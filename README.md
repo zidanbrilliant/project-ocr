@@ -20,11 +20,16 @@ Default testing config:
 - `ENABLE_QWEN_REASONING=false`
 - `QWEN_SERVICE_URL=http://qwen:8000`
 
+Every Streamlit upload now shows the canonical result JSON in **Result JSON**,
+offers it for download, and saves the same payload in `artifacts/results/`.
+This is the payload shape intended for the RabbitMQ result flow; it is kept
+additive so fields can evolve without breaking testing.
+
 DGX Spark standalone Docker defaults to PaddleOCR-VL OCR.
 
 ## Pipeline
 
-Streamlit upload -> document validation -> PDF/image rendering -> preprocessing -> OCR provider -> YOLO detection -> barcode decode -> field extraction -> business rules -> confidence score -> UI result.
+Streamlit upload -> document validation -> PDF/image rendering -> OCR provider -> YOLO detection -> barcode decode -> field extraction -> business rules -> canonical JSON -> UI result.
 
 Production mode keeps the RabbitMQ worker path:
 

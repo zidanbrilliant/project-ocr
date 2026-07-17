@@ -4,6 +4,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from app.application.services.result_builder import build_result_payload
+
 
 def normalize_confidence(value: Any) -> float | None:
     if value is None:
@@ -29,6 +31,7 @@ def normalize_pipeline_result_for_ui(
         raw_result = {}
 
     ext = Path(file_name).suffix.lower() if file_name else ""
+    payload = build_result_payload(raw_result, file_name or "", content_type or "", file_size_bytes, processing_time_ms)
 
     document_info = {
         "file_name": file_name or "",
@@ -39,6 +42,7 @@ def normalize_pipeline_result_for_ui(
     }
 
     pages_raw = raw_result.get("pages", [])
+    payload_pages = payload["documents"][0]["pages"]
     ui_pages: list[dict[str, Any]] = []
 
     for pi, page_obj in enumerate(pages_raw):
@@ -47,13 +51,11 @@ def normalize_pipeline_result_for_ui(
         else:
             page_number = pi + 1
 
-        ocr = raw_result.get("ocr", {})
-        ocr_text = ocr.get("full_text") or ocr.get("raw_text") or ""
-        ocr_engine = ocr.get("engine_name") or ocr.get("engine") or ocr.get("engine_name", "?")
-        ocr_conf = normalize_confidence(ocr.get("mean_confidence") or ocr.get("average_confidence"))
-
-        all_dets = raw_result.get("detections", [])
-        page_dets = [d for d in all_dets if d.get("page_number", 1) == page_number]
+        payload_page = payload_pages[pi]
+        ocr = payload_page["ocr"]
+        ocr_text = ocr.get("raw_text") or ""
+        ocr_engine = ocr.get("engine", "?")
+        ocr_conf = normalize_confidence(ocr.get("average_confidence"))
 
         agg = raw_result.get("detection_aggregated", {})
 
@@ -69,23 +71,23 @@ def normalize_pipeline_result_for_ui(
                 "height": page_obj.shape[0] if hasattr(page_obj, "shape") else 0,
             } if preview_bytes is not None else None,
             "ocr": {
-                "status": "SUCCESS" if ocr_text.strip() else "FAILED",
+                "status": ocr.get("status", "FAILED"),
                 "engine": ocr_engine,
                 "raw_text": ocr_text or "(empty)",
                 "avg_confidence": round(ocr_conf * 100, 1) if ocr_conf is not None else 0,
-                "blocks": ocr.get("blocks", []),
+                "blocks": ocr.get("text_blocks", []),
                 "error": ocr.get("error"),
             },
             "detections": [
                 {
-                    "label": d.get("object_type", d.get("label", "?")),
-                    "confidence": d.get("confidence", 0),
+                    "label": d.get("label", "?"),
+                    "confidence": (d.get("confidence") or 0) * 100,
                     "page_number": d.get("page_number", page_number),
-                    "bbox": d.get("bounding_box", d.get("bbox_pixel_xyxy", [])),
+                    "bbox": (d.get("bounding_box") or {}).get("pixel_xyxy", []),
                 }
-                for d in page_dets
+                for d in payload_page["detections"]
             ],
-            "fields": raw_result.get("fields", {}),
+            "fields": {field["field_name"]: field for field in payload_page["extracted_fields"]},
             "detection_aggregated": agg,
         }
         ui_pages.append(page_ui)
@@ -121,6 +123,7 @@ def normalize_pipeline_result_for_ui(
             "has_ocr": has_ocr,
             "has_detection": has_detection,
         },
+        "rabbitmq_preview": payload,
     }
     return ui_result
 

@@ -5,8 +5,6 @@ from typing import Any
 
 import numpy as np
 
-from app.domain.entities.ai_job import AIJob as AIJobEntity
-from app.domain.entities.final_result import FinalResult
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
 from app.domain.services.remark_policy import RemarkPolicy
 from app.domain.value_objects.confidence_score import ConfidenceScore
@@ -27,9 +25,6 @@ from app.shared.exceptions.base import DocumentError
 from app.shared.logging.logger import get_logger, setup_logging
 from app.application.services.field_extraction_service import FieldExtractionService
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
-from app.infrastructure.database.session import async_session_factory
-from app.infrastructure.database.repositories.ai_job_postgres_repository import AIJobPostgresRepository
-from app.infrastructure.database.repositories.result_postgres_repository import ResultPostgresRepository
 
 
 logger = get_logger(__name__)
@@ -144,9 +139,13 @@ class DirectProcessor:
             for i in range(n_pages):
                 p_img = page_images[i] if i < len(page_images) else b""
                 pp_img = preprocessed[i] if i < len(preprocessed) else None
-                ocr_task = self._ocr.run(pp_img or p_img, extension=ocr_ext)
+                ocr_task = self._ocr.run(p_img, extension=ocr_ext)
                 bc_task = self._barcode_chain.read(pp_img or p_img)
                 page_ocr, page_bc = await asyncio.gather(ocr_task, bc_task)
+                if not (page_ocr.get("raw_text") or "").strip() and pp_img and pp_img != p_img:
+                    fallback_ocr = await self._ocr.run(pp_img, extension=ocr_ext)
+                    if (fallback_ocr.get("raw_text") or "").strip():
+                        page_ocr = fallback_ocr
 
                 page_ocrs.append(page_ocr)
                 page_bcs.append(page_bc)
@@ -166,22 +165,16 @@ class DirectProcessor:
                 if not bc_raw.get("barcode_found") and page_bc.get("barcode_found"):
                     bc_raw = page_bc
 
-            ocr_raw["raw_text"] = "\n".join(all_texts)
+            ocr_raw["raw_text"] = _merge_ocr_text(pdf_text_result.get("raw_text", "") or "", "\n".join(all_texts))
             ocr_raw["tokens_json"] = all_tokens
             ocr_raw["average_confidence"] = round(total_conf_sum / max(total_conf_count, 1), 2)
-            ocr_errors = [err for err in (_ocr_error(page_ocr) for page_ocr in page_ocrs) if err]
+            ocr_errors = [] if pdf_text_result.get("raw_text", "").strip() else [
+                err for err in (_ocr_error(page_ocr) for page_ocr in page_ocrs) if err
+            ]
             if page_ocrs:
                 ocr_raw["engine_name"] = page_ocrs[0].get("engine_name", "none")
             if ocr_errors:
                 ocr_raw["error"] = ocr_errors[0]
-
-            if not ocr_raw.get("raw_text", "").strip() and pdf_text_result.get("raw_text", "").strip():
-                ocr_raw = {
-                    "engine_name": pdf_text_result.get("engine_name", "pypdf"),
-                    "raw_text": pdf_text_result.get("raw_text", ""),
-                    "tokens_json": pdf_text_result.get("tokens_json", []),
-                    "average_confidence": pdf_text_result.get("average_confidence", 95.0),
-                }
 
             if not ocr_raw.get("raw_text", "").strip():
                 ocr_raw.setdefault("engine_name", page_ocrs[0].get("engine_name", "none") if page_ocrs else "none")
@@ -198,10 +191,10 @@ class DirectProcessor:
             quality = quality_scores[0] if quality_scores else {}
 
             all_detections: list[dict[str, Any]] = []
-            if preprocessed:
-                all_detections = await self._yolo.detect_batch(preprocessed)
+            if page_images:
+                all_detections = await self._yolo.detect_batch(page_images)
                 if not all_detections and self._yolo.load_error is None:
-                    all_detections = await self._yolo.detect_batch(preprocessed, input_size=960)
+                    all_detections = await self._yolo.detect_batch(page_images, input_size=960)
             else:
                 all_detections = []
 
@@ -228,7 +221,10 @@ class DirectProcessor:
 
             fields = ocr_raw.get("fields_json") or self._field_extractor.extract_from_ocr(ocr_raw)
             layout_fields = self._field_extractor.extract_layout_aware(ocr_raw.get("tokens_json", []))
-            fields.update(layout_fields)
+            for name, field in layout_fields.items():
+                fields.setdefault(name, field)
+            for field in fields.values():
+                field.setdefault("source_page_number", 1)
             result["fields"] = fields
 
             if self._reasoning_qwen is not None and preprocessed:
@@ -256,12 +252,15 @@ class DirectProcessor:
             ocr_entity.billing_confidence = ocr_raw.get("billing_confidence") or fields.get("billing_number", {}).get("confidence")
             ocr_entity.amount_confidence = ocr_raw.get("amount_confidence") or fields.get("transaction_amount", {}).get("confidence")
 
-            validation = self._rule_evaluator.validate_invoice(
-                ocr=ocr_entity,
-                detections=list(aggregated.values()),
-                amount=amount,
-                confidence=ocr_raw.get("average_confidence"),
-            )
+            if doc_type in {"DN", "DELIVERY_NOTE"}:
+                validation = self._rule_evaluator.validate_delivery_note(detections=det_entities)
+            else:
+                validation = self._rule_evaluator.validate_invoice(
+                    ocr=ocr_entity,
+                    detections=list(aggregated.values()),
+                    amount=amount,
+                    confidence=ocr_raw.get("average_confidence"),
+                )
 
             total_conf = self._conf_scorer.calculate(
                 ocr_result=ocr_raw,
@@ -362,6 +361,11 @@ class DirectProcessor:
 
     async def _save_to_db(self, result: dict[str, Any], file_bytes: bytes, filename: str, doc_type: str) -> None:
         import uuid as uuid_mod
+        from app.domain.entities.ai_job import AIJob as AIJobEntity
+        from app.domain.entities.final_result import FinalResult
+        from app.infrastructure.database.repositories.ai_job_postgres_repository import AIJobPostgresRepository
+        from app.infrastructure.database.repositories.result_postgres_repository import ResultPostgresRepository
+        from app.infrastructure.database.session import async_session_factory
         from app.shared.utils.hash import build_idempotency_key
 
         job_id = uuid_mod.uuid4()
@@ -457,3 +461,15 @@ class DirectProcessor:
 
     async def close(self) -> None:
         return None
+
+
+def _merge_ocr_text(native_text: str, visual_text: str) -> str:
+    native = native_text.strip()
+    visual = visual_text.strip()
+    if not native:
+        return visual
+    if not visual or visual in native:
+        return native
+    if native in visual:
+        return visual
+    return f"{native}\n\n{visual}"

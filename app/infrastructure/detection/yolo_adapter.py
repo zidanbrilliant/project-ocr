@@ -1,4 +1,4 @@
-import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -33,11 +33,13 @@ class YOLOAdapter:
     async def warmup(self) -> None:
         try:
             from ultralytics import YOLO
+            if not Path(settings.YOLO_MODEL_PATH).is_file():
+                raise FileNotFoundError(f"YOLO model not found: {settings.YOLO_MODEL_PATH}")
             self._model = YOLO(settings.YOLO_MODEL_PATH)
             self._class_names = self._model.names
             self._device = _get_device()
             _register_health("yolo", available=True, model=str(settings.YOLO_MODEL_PATH), device=self._device)
-            logger.info("yolo_loaded", classes=dict(self._class_names), device=self._device)
+            logger.info("yolo_loaded", classes=_class_map(self._class_names), device=self._device)
             self._loaded = True
             self._load_error = None
         except Exception as e:
@@ -56,12 +58,16 @@ class YOLOAdapter:
         try:
             self._last_detect_error = None
             import cv2
-            imgs = []
-            for b in image_bytes_list:
+            imgs: list[np.ndarray] = []
+            page_indexes: list[int] = []
+            for page_idx, b in enumerate(image_bytes_list, start=1):
                 arr = np.frombuffer(b, dtype=np.uint8)
                 img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if img is not None:
                     imgs.append(img)
+                    page_indexes.append(page_idx)
+                else:
+                    logger.warning("yolo_page_decode_failed", page_number=page_idx)
             if not imgs:
                 return []
 
@@ -74,18 +80,26 @@ class YOLOAdapter:
                 verbose=False,
             )
             all_detections: list[dict[str, Any]] = []
-            for page_idx, r in enumerate(results):
+            for result_idx, r in enumerate(results):
                 if r.boxes is None:
                     continue
+                page_number = page_indexes[result_idx]
+                height, width = r.orig_shape
                 for box in r.boxes:
                     cls_id = int(box.cls[0])
+                    xyxy = [int(c) for c in box.xyxy[0].tolist()]
+                    normalized = _normalized_box(box, xyxy, width, height)
                     all_detections.append({
-                        "object_type": self._class_names.get(cls_id, f"class_{cls_id}"),
+                        "object_type": _class_name(self._class_names, cls_id),
                         "class_id": cls_id,
-                        "page_number": page_idx + 1,
+                        "page_number": page_number,
                         "confidence": round(float(box.conf[0]) * 100, 2),
-                        "bounding_box": [int(c) for c in box.xyxy[0].tolist()],
-                        "model_name": "yolo_doc",
+                        "bounding_box": xyxy,
+                        "normalized_bounding_box": normalized,
+                        "page_width": width,
+                        "page_height": height,
+                        "threshold_used": settings.YOLO_CONFIDENCE_THRESHOLD,
+                        "model_name": Path(settings.YOLO_MODEL_PATH).name,
                         "model_version": "sesi_4",
                     })
             return all_detections
@@ -103,3 +117,20 @@ def _get_device() -> str:
         return "cuda" if torch.cuda.is_available() else "cpu"
     except ImportError:
         return "cpu"
+
+
+def _class_map(names: Any) -> dict[int, str]:
+    if isinstance(names, dict):
+        return {int(key): str(value) for key, value in names.items()}
+    return {index: str(value) for index, value in enumerate(names)}
+
+
+def _class_name(names: Any, class_id: int) -> str:
+    return _class_map(names).get(class_id, f"class_{class_id}")
+
+
+def _normalized_box(box: Any, xyxy: list[int], width: int, height: int) -> list[float]:
+    xyxyn = getattr(box, "xyxyn", None)
+    if xyxyn is not None:
+        return [round(float(value), 6) for value in xyxyn[0].tolist()]
+    return [round(xyxy[0] / width, 6), round(xyxy[1] / height, 6), round(xyxy[2] / width, 6), round(xyxy[3] / height, 6)]

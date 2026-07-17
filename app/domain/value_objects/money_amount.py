@@ -1,8 +1,7 @@
 import re
 from dataclasses import dataclass
 
-_RUPIAH_CLEAN = re.compile(r"[Rp\s\.]")
-_COMMA_DECIMAL = re.compile(r",(\d{2})$")
+_NON_NUMERIC = re.compile(r"[^0-9,.-]")
 
 
 @dataclass(frozen=True)
@@ -12,8 +11,25 @@ class MoneyAmount:
 
     @classmethod
     def parse_rupiah(cls, raw: str) -> "MoneyAmount | None":
-        cleaned = _RUPIAH_CLEAN.sub("", raw.strip())
-        cleaned = _COMMA_DECIMAL.sub(r".\1", cleaned)
+        cleaned = _NON_NUMERIC.sub("", raw.strip())
+        if not cleaned:
+            return None
+        if "," in cleaned and "." in cleaned:
+            # The last separator is decimal; the other is a thousands separator.
+            decimal = "," if cleaned.rfind(",") > cleaned.rfind(".") else "."
+            cleaned = cleaned.replace("." if decimal == "," else ",", "")
+            if decimal == ",":
+                cleaned = cleaned.replace(",", ".")
+        elif cleaned.count(",") > 1:
+            cleaned = cleaned.replace(",", "")
+        elif cleaned.count(".") > 1:
+            cleaned = cleaned.replace(".", "")
+        elif "," in cleaned and len(cleaned.rsplit(",", 1)[1]) != 2:
+            cleaned = cleaned.replace(",", "")
+        elif "." in cleaned and len(cleaned.rsplit(".", 1)[1]) != 2:
+            cleaned = cleaned.replace(".", "")
+        else:
+            cleaned = cleaned.replace(",", ".")
         try:
             return cls(value=float(cleaned))
         except (ValueError, TypeError):

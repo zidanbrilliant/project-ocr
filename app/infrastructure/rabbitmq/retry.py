@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from aio_pika import Message
@@ -26,7 +27,7 @@ class RetryHandler:
         raw = payload.get("_raw_body") or b""
         if isinstance(raw, str):
             raw = raw.encode()
-        body = raw or str(payload).encode()
+        body = raw or json.dumps({key: value for key, value in payload.items() if key != "_raw_body"}).encode()
 
         message = Message(
             body=body,

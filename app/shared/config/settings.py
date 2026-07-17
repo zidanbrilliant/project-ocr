@@ -79,14 +79,15 @@ class Settings(BaseSettings):
     PADDLEOCR_VL_USE_QUEUES: bool = True
 
     ENABLE_QWEN_REASONING: bool = False
+    TEST_RESULT_DIR: str = "artifacts/results"
 
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"
     INTERNAL_API_KEY: str = ""
 
     # --- concurrency ---
-    MAX_PARALLEL_DOCUMENTS: int = 3
+    MAX_PARALLEL_DOCUMENTS: int = 1
     MAX_PARALLEL_DOWNLOADS: int = 4
-    MAX_PARALLEL_PAGES: int = 16
+    MAX_PARALLEL_PAGES: int = 1
 
     # --- timeouts ---
     DOCUMENT_PROCESSING_TIMEOUT_SECONDS: int = 300

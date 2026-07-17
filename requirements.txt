@@ -16,14 +16,6 @@ streamlit>=1.35
 zxing-cpp>=2.2
 pyzbar>=0.1
 paddleocr[doc-parser]>=3.0.0
-pytest>=8.2
-pytest-asyncio>=0.23
-pytest-cov>=5.0
-ruff>=0.4
-mypy>=1.10
-black>=24.4
-pre-commit>=3.7
-
 # OCR and document parsing
 pypdf>=4.0
 # PaddleOCR/PaddlePaddle are intentionally installed in the DGX OCR runtime,

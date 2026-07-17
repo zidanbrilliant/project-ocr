@@ -4,38 +4,27 @@ from typing import Any
 from app.domain.value_objects.money_amount import MoneyAmount
 
 _INVOICE_KEYWORDS = [
-    r"(?i)(invoice\s*(no|number)?|no\.?\s*invoice|nomor\s*invoice|faktur)\s*[:\-]?\s*([A-Z0-9\/\.\-]+)",
-    r"(?i)(inv\s*no\.?)\s*[:\-]?\s*([A-Z0-9\/\.\-]+)",
-    r"(?i)(no\.?\s*faktur)\s*[:\-]?\s*([A-Z0-9\/\.\-\s]+)",
-    r"(?i)(faktur\s*pajak)\s*[:\-]?\s*([0-9\.\-]+)",
-    r"(?i)(^|\s)(INV[\s\-]?[0-9\/\-]+)",
-    r"(?i)(^|\s)(FAK[\s\-]?[0-9\/\-]+)",
+    r"(?i)(?:invoice\s*(?:no|number)?|no\.?\s*invoice|nomor\s*invoice|no\.?\s*faktur|faktur\s*pajak|inv\s*no\.?)\s*[:#\-]?\s*(?P<value>[A-Z0-9][A-Z0-9/\.\-]*)",
+    r"(?i)(?:^|\s)(?P<value>(?:INV|FAK)[\s\-]?[0-9][A-Z0-9/\-]*)",
 ]
 
 _BILLING_KEYWORDS = [
-    r"(?i)(billing\s*(no|number|id)?|nomor\s*billing|no\.?\s*tagihan)\s*[:\-]?\s*([A-Z0-9\/\.\-]+)",
-    r"(?i)(kode\s*billing)\s*[:\-]?\s*([A-Z0-9]+)",
+    r"(?i)(?:billing\s*(?:no|number|id)?|nomor\s*billing|no\.?\s*tagihan|kode\s*billing)\s*[:#\-]?\s*(?P<value>[A-Z0-9][A-Z0-9/\.\-]*)",
 ]
 
 _AMOUNT_KEYWORDS = [
-    r"(?i)(grand\s*total|total\s*amount|amount\s*due|total|jumlah|nilai\s*tagihan|sub\s*total)\s*[:\-]?\s*(Rp\.?\s*)?([0-9\.\,]+)",
-    r"(?i)(jumlah\s*(total)?)\s*[:\-]?\s*(Rp\.?\s*)?([0-9\.\,]+)",
-    r"(?i)(dpp\s*)\s*[:\-]?\s*(Rp\.?\s*)?([0-9\.\,]+)",
-    r"(?i)(total\s*(bayar)?)\s*[:\-]?\s*(Rp\.?\s*)?([0-9\.\,]+)",
-    r"(?:^|\s)Rp\.?\s*([0-9]{1,3}(?:\.[0-9]{3})*(?:\,[0-9]+)?)",
+    r"(?i)(?:grand\s*total|total\s*bayar|total\s*amount|amount\s*due|jumlah\s*total|nilai\s*tagihan|sub\s*total|total|jumlah|dpp)\s*[:=\-]?\s*(?:Rp\.?\s*)?(?P<value>[0-9][0-9.,]*)",
+    r"(?i)\bRp\.?\s*(?P<value>[0-9][0-9.,]*)",
 ]
 
 _DATE_KEYWORDS = [
-    r"(?i)(date|tanggal|tgl)\s*[:\-]?\s*(\d{2,4}[-/]\d{1,2}[-/]\d{2,4})",
-    r"(?i)(date|tanggal|tgl)\s*[:\-]?\s*(\d{1,2}\s+[A-Za-z]+\s+\d{2,4})",
-    r"(?i)(tgl\.?\s*)\s*(\d{2}[-/]\d{2}[-/]\d{2,4})",
-    r"(?i)(\d{2}[-/]\d{2}[-/]\d{4})",
+    r"(?i)(?:date|tanggal|tgl\.?)\s*[:\-]?\s*(?P<value>\d{2,4}[-/]\d{1,2}[-/]\d{2,4})",
+    r"(?i)(?:date|tanggal|tgl\.?)\s*[:\-]?\s*(?P<value>\d{1,2}\s+[A-Za-z]+\s+\d{2,4})",
 ]
 
 _VENDOR_KEYWORDS = [
-    r"(?i)(vendor|supplier|pemasok|perusahaan|penjual)\s*[:\-]?\s*(.+)",
-    r"(?i)(pt\.?\s+[\w\s]+)",
-    r"(?i)(cv\.?\s+[\w\s]+)",
+    r"(?i)(?:vendor|supplier|pemasok|perusahaan|penjual)\s*[:\-]?\s*(?P<value>[^\n]+)",
+    r"(?i)(?P<value>(?:pt|cv)\.?\s+[A-Za-z0-9 .,&()\-]+)",
 ]
 
 
@@ -47,38 +36,38 @@ class FieldExtractionService:
 
         fields: dict[str, Any] = {}
 
-        inv = self._extract(raw_text, _INVOICE_KEYWORDS, 3)
+        inv = self._extract(raw_text, _INVOICE_KEYWORDS)
         if inv:
-            fields["document_number"] = {"value": inv, "confidence": 90.0}
+            fields["document_number"] = self._field(inv, 0.90, "regex")
 
-        bill = self._extract(raw_text, _BILLING_KEYWORDS, 3)
+        bill = self._extract(raw_text, _BILLING_KEYWORDS)
         if bill:
-            fields["billing_number"] = {"value": bill, "confidence": 85.0}
+            fields["billing_number"] = self._field(bill, 0.85, "regex")
 
-        amt_raw = self._extract(raw_text, _AMOUNT_KEYWORDS, 3)
+        amt_raw = self._extract(raw_text, _AMOUNT_KEYWORDS)
         if amt_raw:
             parsed = MoneyAmount.parse_rupiah(amt_raw)
             if parsed:
-                fields["transaction_amount"] = {"value": parsed.value, "confidence": 85.0, "currency": "IDR"}
+                fields["transaction_amount"] = self._field(parsed.value, 0.85, "regex", amt_raw, currency="IDR")
 
         if "transaction_amount" not in fields:
             candidates = self._find_amount_candidates(text_lines)
             if candidates:
-                fields["transaction_amount"] = {"value": candidates[0], "confidence": 60.0, "currency": "IDR"}
+                fields["transaction_amount"] = self._field(candidates[0], 0.60, "token", currency="IDR")
 
-        d = self._extract(raw_text, _DATE_KEYWORDS, 2)
+        d = self._extract(raw_text, _DATE_KEYWORDS)
         if d:
-            fields["transaction_date"] = {"value": d, "confidence": 80.0}
+            fields["transaction_date"] = self._field(d, 0.80, "regex")
 
-        v = self._extract(raw_text, _VENDOR_KEYWORDS, 2)
+        v = self._extract(raw_text, _VENDOR_KEYWORDS)
         if v:
-            fields["vendor_name"] = {"value": v, "confidence": 70.0}
+            fields["vendor_name"] = self._field(v, 0.70, "regex", source_text=v)
 
         if "document_number" not in fields:
             for line in text_lines:
                 m = re.search(r"(?i)((?:INV|FAK|INVOICE)[\s\-/]?[0-9]{2,}[0-9/\-]*)", line)
                 if m:
-                    fields["document_number"] = {"value": m.group(1).strip(), "confidence": 50.0}
+                    fields["document_number"] = self._field(m.group(1).strip(), 0.50, "token")
                     break
 
         return fields
@@ -90,31 +79,38 @@ class FieldExtractionService:
         for label, value in label_value_pairs:
             label_lower = label.lower()
             if any(k in label_lower for k in ["invoice", "faktur", "inv"]):
-                fields["document_number"] = {"value": value, "confidence": 90.0, "method": "layout"}
+                fields["document_number"] = self._field(value, 0.90, "layout", source_text=f"{label}: {value}")
             elif any(k in label_lower for k in ["billing", "tagihan"]):
-                fields["billing_number"] = {"value": value, "confidence": 85.0, "method": "layout"}
+                fields["billing_number"] = self._field(value, 0.85, "layout", source_text=f"{label}: {value}")
             elif any(k in label_lower for k in ["total", "amount", "jumlah"]):
                 parsed = MoneyAmount.parse_rupiah(value)
                 if parsed:
-                    fields["transaction_amount"] = {"value": parsed.value, "confidence": 85.0, "currency": "IDR", "method": "layout"}
+                    fields["transaction_amount"] = self._field(parsed.value, 0.85, "layout", value, currency="IDR", source_text=f"{label}: {value}")
             elif any(k in label_lower for k in ["date", "tanggal", "tgl"]):
-                fields["transaction_date"] = {"value": value, "confidence": 80.0, "method": "layout"}
+                fields["transaction_date"] = self._field(value, 0.80, "layout", source_text=f"{label}: {value}")
             elif any(k in label_lower for k in ["vendor", "supplier", "perusahaan"]):
-                fields["vendor_name"] = {"value": value, "confidence": 70.0, "method": "layout"}
+                fields["vendor_name"] = self._field(value, 0.70, "layout", source_text=f"{label}: {value}")
 
         return fields
 
-    def _extract(self, text: str, patterns: list[re.Pattern | str], group: int) -> str | None:
+    def _extract(self, text: str, patterns: list[re.Pattern | str]) -> str | None:
         for pat in patterns:
             m = re.search(pat, text)
-            if m and m.lastindex and m.lastindex >= group:
-                val = m.group(group)
-                if val:
-                    return val.strip()
-                val = m.group(1)
-                if val:
-                    return val.strip()
+            if m and m.groupdict().get("value"):
+                return m.group("value").strip()
         return None
+
+    def _field(
+        self, value: Any, confidence: float, method: str, raw_value: Any | None = None,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        return {
+            "value": value,
+            "raw_value": str(raw_value if raw_value is not None else value),
+            "confidence": confidence,
+            "extraction_method": method,
+            **extra,
+        }
 
     def _find_amount_candidates(self, lines: list[str]) -> list[float]:
         candidates = []
@@ -134,7 +130,7 @@ class FieldExtractionService:
 
         for i, token in enumerate(tokens):
             text = token.get("text", "")
-            if ":" in text or ":" in text:
+            if ":" in text:
                 parts = re.split(r"[:]\s*", text, maxsplit=1)
                 if len(parts) == 2 and parts[1].strip():
                     pairs.append((parts[0].strip(), parts[1].strip()))

@@ -24,6 +24,8 @@ class AIJobPostgresRepository:
             file_nm=job.file_nm,
             ai_scan_app=job.ai_scan_app,
             path_file=job.path_file,
+            pv_no=job.pv_no,
+            pv_year=job.pv_year,
             processing_status=job.processing_status,
             retry_count=job.retry_count,
             original_payload=job.original_payload,
@@ -89,6 +91,9 @@ class AIJobPostgresRepository:
             )
         )
         await self._session.execute(stmt)
+
+    async def commit(self) -> None:
+        await self._session.commit()
 
     def _to_entity(self, model: AIJobModel) -> AIJobEntity:
         return AIJobEntity(

@@ -19,17 +19,18 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ >/etc/timezone
 # starts, not while this image is built.
 ENV CC=gcc \
     CXX=g++ \
-    TRITON_CACHE_DIR=/tmp/triton-cache
+    TRITON_CACHE_DIR=/tmp/triton-cache \
+    PYTHONUNBUFFERED=1
 
 RUN mkdir -p "$TRITON_CACHE_DIR"
-
-RUN python -m venv /opt/venv
-ENV PATH=/opt/venv/bin:$PATH
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# The NGC image ships Debian's PyYAML without pip's RECORD metadata. Overlay it
+# first so resolving application dependencies never tries to uninstall it.
+RUN python -m pip install --no-cache-dir --ignore-installed PyYAML==6.0.2 \
+    && python -m pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
