@@ -84,6 +84,7 @@ services:
       SERVICE_NAME: qwen-field-reasoning
       ENABLE_DATABASE: "false"
       ENABLE_RABBITMQ: "false"
+      OCR_PROVIDER: nemotron
       REASONING_ENABLED: "true"
       REASONING_SERVICE_URL: ""
       REASONING_MODEL_DIR: ${REASONING_MODEL_DIR:-/mnt/models/Qwen3.5-9B}
