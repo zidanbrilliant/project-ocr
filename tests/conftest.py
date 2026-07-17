@@ -1,4 +1,13 @@
+import sys
+import types
+
 import pytest
+
+if "structlog" not in sys.modules:
+    sys.modules["structlog"] = types.SimpleNamespace(
+        get_logger=lambda *args, **kwargs: types.SimpleNamespace(),
+        stdlib=types.SimpleNamespace(BoundLogger=object),
+    )
 
 
 @pytest.fixture

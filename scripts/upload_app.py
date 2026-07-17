@@ -124,6 +124,12 @@ def _render_model_status(processor: DirectProcessor) -> None:
     else:
         st.warning(f"Nemotron Parse: not loaded ({getattr(nemotron, '_load_error', 'warmup pending')})")
 
+    reasoning = processor._field_reasoning
+    if reasoning.is_available:
+        st.success("Qwen3.5-9B reasoning: ready")
+    else:
+        st.warning(f"Qwen3.5-9B reasoning: not loaded ({reasoning.load_error or 'warmup pending'})")
+
     yolo_loaded = getattr(processor._yolo, "_loaded", False)
     if yolo_loaded:
         st.success("YOLO: ready")
@@ -331,6 +337,9 @@ def _render_fields(page: dict) -> None:
                 "Field": name,
                 "Value": str(value),
                 "Confidence": f"{confidence}%" if isinstance(confidence, (int, float)) else confidence,
+                "Status": field_data.get("status", "?"),
+                "Selected by": field_data.get("reasoning_engine", "deterministic"),
+                "Reason": field_data.get("reason_code", ""),
             }
         )
     st.table(rows)

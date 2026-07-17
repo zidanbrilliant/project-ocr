@@ -197,6 +197,8 @@ def _field_entries(fields: dict[str, Any], page_number: int | None) -> list[dict
                 "source_label": field.get("source_label"),
                 "source_bbox": field.get("source_bbox"),
                 "extraction_method": field.get("extraction_method", field.get("method")),
+                "reason_code": field.get("reason_code"),
+                "reasoning_engine": field.get("reasoning_engine"),
             }
         )
     return entries

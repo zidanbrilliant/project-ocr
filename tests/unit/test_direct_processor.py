@@ -55,7 +55,19 @@ def test_pdf_text_falls_back_when_page_ocr_is_blank(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(processor, "_preprocessor", types.SimpleNamespace(preprocess=lambda image_bytes: image_bytes, compute_quality=lambda image_bytes: {"resolution_score": 100, "blur_score": 100, "brightness_score": 100, "page_readability_score": 100}))
     monkeypatch.setattr(processor, "_barcode_chain", types.SimpleNamespace(read=lambda *args, **kwargs: asyncio.sleep(0, result={"barcode_found": False, "barcode_decoded": False})))
     monkeypatch.setattr(processor, "_yolo", types.SimpleNamespace(detect_batch=lambda *args, **kwargs: asyncio.sleep(0, result=[]), load_error=None, last_detect_error=None))
-    monkeypatch.setattr(processor, "_field_extractor", types.SimpleNamespace(extract_from_ocr=lambda *args, **kwargs: {}, extract_layout_aware=lambda *args, **kwargs: {}))
+    monkeypatch.setattr(
+        processor,
+        "_field_extractor",
+        types.SimpleNamespace(
+            collect_document_candidates=lambda *args, **kwargs: {},
+            resolve_document_candidates=lambda *args, **kwargs: {},
+        ),
+    )
+    monkeypatch.setattr(
+        processor,
+        "_field_reasoning",
+        types.SimpleNamespace(resolve=lambda *args, **kwargs: asyncio.sleep(0, result=({}, {"used": False}))),
+    )
     monkeypatch.setattr(processor, "_rule_evaluator", types.SimpleNamespace(validate_invoice=lambda *args, **kwargs: types.SimpleNamespace(passed=False, return_status="NG", return_code="NG", failed_rules=[])))
     monkeypatch.setattr(processor, "_conf_scorer", types.SimpleNamespace(calculate=lambda *args, **kwargs: 0.0))
     monkeypatch.setattr(processor, "_remark", types.SimpleNamespace(generate=lambda *args, **kwargs: ""))

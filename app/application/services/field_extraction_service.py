@@ -29,6 +29,11 @@ class FieldExtractionService:
     """Extract a small, evidence-backed field set from Nemotron OCR blocks."""
 
     def extract_document_pages(self, pages: list[dict[str, Any]], doc_type: str | None = None) -> dict[str, Any]:
+        candidates = self.collect_document_candidates(pages, doc_type)
+        return self.resolve_document_candidates(candidates)
+
+    def collect_document_candidates(self, pages: list[dict[str, Any]], doc_type: str | None = None) -> dict[str, list[dict[str, Any]]]:
+        """Return every evidence-backed candidate before a winner is selected."""
         candidates: dict[str, list[dict[str, Any]]] = {}
         for page_number, page in enumerate(pages, start=1):
             for name, items in self._candidates(page, doc_type).items():
@@ -36,6 +41,9 @@ class FieldExtractionService:
                     item["source_page_number"] = page_number
                     item["source_page_index"] = page_number - 1
                     candidates.setdefault(name, []).append(item)
+        return candidates
+
+    def resolve_document_candidates(self, candidates: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
         return {name: self._resolve(name, items) for name, items in candidates.items()}
 
     def extract_from_ocr(self, ocr_result: dict[str, Any], doc_type: str | None = None) -> dict[str, Any]:

@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     WORKER_PREFETCH_COUNT: int = 1
     NEMOTRON_MODEL_DIR: str = "/mnt/models/Nemotron-Parse-v1.2"
     NEMOTRON_SERVICE_URL: str = ""
+    REASONING_ENABLED: bool = True
+    REASONING_MODEL_DIR: str = "/mnt/models/Qwen3.5-9B"
+    REASONING_SERVICE_URL: str = ""
+    REASONING_TIMEOUT_SECONDS: int = 30
+    REASONING_MAX_OUTPUT_TOKENS: int = 256
+    REASONING_CONFIDENCE_THRESHOLD: float = 0.85
     TEST_RESULT_DIR: str = "artifacts/results"
 
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"

@@ -4,6 +4,7 @@ import signal
 from app.application.services.ai_pipeline_orchestrator import AIPipelineOrchestrator
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
+from app.application.services.field_reasoning_service import FieldReasoningService
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
 from app.infrastructure.barcode.barcode_fallback_chain import BarcodeFallbackChain
 from app.infrastructure.barcode.opencv_barcode_adapter import OpenCVBarcodeAdapter
@@ -57,11 +58,13 @@ class WorkerMain:
         preprocessor = ImagePreprocessor()
         validator = DocumentValidator()
         field_extractor = FieldExtractionService()
+        field_reasoning = FieldReasoningService()
         rule_eval = BusinessRuleEvaluator()
         conf_scorer = ConfidenceScoringService()
 
         ocr_engine = DocumentOCR()
         await ocr_engine.warmup()
+        await field_reasoning.warmup()
 
         yolo = YOLOAdapter()
         try:
@@ -93,6 +96,7 @@ class WorkerMain:
                     barcode_chain=barcode_chain,
                     validator=validator,
                     field_extractor=field_extractor,
+                    field_reasoning=field_reasoning,
                     rule_evaluator=rule_eval,
                     confidence_scorer=conf_scorer,
                 )

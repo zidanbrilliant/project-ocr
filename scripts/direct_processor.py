@@ -5,6 +5,7 @@ from typing import Any
 
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
+from app.application.services.field_reasoning_service import FieldReasoningService
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
 from app.domain.services.remark_policy import RemarkPolicy
 from app.domain.value_objects.confidence_score import ConfidenceScore
@@ -40,6 +41,7 @@ class DirectProcessor:
         self._pdf_renderer = PDFRenderer(dpi=200)
         self._preprocessor = ImagePreprocessor()
         self._field_extractor = FieldExtractionService()
+        self._field_reasoning = FieldReasoningService()
         self._rule_evaluator = BusinessRuleEvaluator()
         self._conf_scorer = ConfidenceScoringService()
         self._remark = RemarkPolicy()
@@ -51,7 +53,7 @@ class DirectProcessor:
 
     async def warmup(self) -> None:
         logger.info("processor_warmup_start")
-        engines = [("document_ocr", self._ocr), ("yolo", self._yolo)]
+        engines = [("document_ocr", self._ocr), ("yolo", self._yolo), ("field_reasoning", self._field_reasoning)]
 
         for name, eng in engines:
             try:
@@ -229,10 +231,11 @@ class DirectProcessor:
             barcode_raw = bc_raw
             result["barcode"] = barcode_raw
 
-            fields = self._field_extractor.extract_document_pages(page_ocrs, doc_type)
+            candidates = self._field_extractor.collect_document_candidates(page_ocrs, doc_type)
+            fields = self._field_extractor.resolve_document_candidates(candidates)
+            fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc_type)
             result["fields"] = fields
-
-            result["reasoning"] = {"enabled": False, "engine": "deterministic"}
+            result["reasoning"] = reasoning
 
             amount = None
             if fields.get("transaction_amount"):

@@ -14,6 +14,8 @@ services:
       ENABLE_RABBITMQ: "false"
       OCR_PROVIDER: nemotron
       NEMOTRON_SERVICE_URL: http://nemotron:8000
+      REASONING_ENABLED: "true"
+      REASONING_SERVICE_URL: http://reasoning:8000
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
@@ -25,6 +27,8 @@ services:
     depends_on:
       nemotron:
         condition: service_healthy
+      reasoning:
+        condition: service_started
     deploy:
       resources:
         reservations:
@@ -57,6 +61,39 @@ services:
     runtime: ${DOCKER_RUNTIME:-nvidia}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/nemotron/health').read()\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  reasoning:
+    profiles: ["standalone", "prod"]
+    build:
+      context: .
+      target: reasoning
+    env_file:
+      - .env
+    environment:
+      RUN_MODE: api
+      SERVICE_NAME: qwen-field-reasoning
+      ENABLE_DATABASE: "false"
+      ENABLE_RABBITMQ: "false"
+      REASONING_ENABLED: "true"
+      REASONING_SERVICE_URL: ""
+      REASONING_MODEL_DIR: ${REASONING_MODEL_DIR:-/mnt/models/Qwen3.5-9B}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - /mnt/models:/mnt/models:ro
+    runtime: ${DOCKER_RUNTIME:-nvidia}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/reasoning/health').read()\""]
       interval: 15s
       timeout: 10s
       retries: 20
@@ -101,6 +138,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/vision_ai
       OCR_PROVIDER: nemotron
       NEMOTRON_SERVICE_URL: http://nemotron:8000
+      REASONING_ENABLED: "true"
+      REASONING_SERVICE_URL: http://reasoning:8000
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     depends_on:
@@ -110,6 +149,8 @@ services:
         condition: service_healthy
       nemotron:
         condition: service_healthy
+      reasoning:
+        condition: service_started
     volumes:
       - ./models:/app/models:ro
       - /mnt/models:/mnt/models:ro

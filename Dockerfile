@@ -37,3 +37,6 @@ CMD ["streamlit", "run", "scripts/upload_app.py", "--server.address=0.0.0.0", "-
 
 FROM base AS nemotron
 CMD ["uvicorn", "app.interfaces.api.nemotron_main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM base AS reasoning
+CMD ["uvicorn", "app.interfaces.api.reasoning_main:app", "--host", "0.0.0.0", "--port", "8000"]

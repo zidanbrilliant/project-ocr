@@ -80,6 +80,7 @@ class DocumentProcessingResult:
     detections_aggregated: dict[str, Any] | None = None
     barcode_result: dict[str, Any] | None = None
     extracted_fields: list[dict[str, Any]] = field(default_factory=list)
+    reasoning: dict[str, Any] | None = None
     duplicate_check: dict[str, Any] | None = None
     validations: list[dict[str, Any]] = field(default_factory=list)
     document_summary: dict[str, Any] | None = None

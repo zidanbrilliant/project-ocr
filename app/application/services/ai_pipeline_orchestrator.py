@@ -9,6 +9,7 @@ from aio_pika.abc import AbstractIncomingMessage
 from app.application.dto.request_normalizer import normalize_request
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
+from app.application.services.field_reasoning_service import FieldReasoningService
 from app.application.services.result_builder import RESULT_SCHEMA_VERSION, build_result_envelope
 from app.domain.entities.ai_job import AIJob as AIJobEntity
 from app.domain.entities.final_result import FinalResult
@@ -73,6 +74,7 @@ class AIPipelineOrchestrator:
         barcode_chain: BarcodeFallbackChain,
         validator: DocumentValidator,
         field_extractor: FieldExtractionService,
+        field_reasoning: FieldReasoningService,
         rule_evaluator: BusinessRuleEvaluator,
         confidence_scorer: ConfidenceScoringService,
     ) -> None:
@@ -90,6 +92,7 @@ class AIPipelineOrchestrator:
         self._barcode_chain = barcode_chain
         self._validator = validator
         self._field_extractor = field_extractor
+        self._field_reasoning = field_reasoning
         self._rule_evaluator = rule_evaluator
         self._confidence_scorer = confidence_scorer
         # Global per-worker page budget. A semaphore created per document would
@@ -208,6 +211,7 @@ class AIPipelineOrchestrator:
                 "document_result": dr.document_result,
                 "confidence": dr.confidence,
                 "fields": dr.extracted_fields,
+                "reasoning": dr.reasoning,
                 "detections": dr.detections,
                 "validation": dr.validations,
                 "pages": [
@@ -401,7 +405,9 @@ class AIPipelineOrchestrator:
                 ocr_aggregated["error"] = ocr_errors[0]
 
             # Extract fields
-            fields = self._field_extractor.extract_document_pages(ocr_results, doc.document_type)
+            candidates = self._field_extractor.collect_document_candidates(ocr_results, doc.document_type)
+            fields = self._field_extractor.resolve_document_candidates(candidates)
+            fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc.document_type)
             ocr_aggregated.update(
                 {
                     "invoice_number": fields.get("document_number", {}).get("value"),
@@ -413,6 +419,7 @@ class AIPipelineOrchestrator:
                 }
             )
             result.extracted_fields = [{"field_name": name, **field} for name, field in fields.items()]
+            result.reasoning = reasoning
             for page in result.pages:
                 page.extracted_fields = [
                     field for field in result.extracted_fields if field.get("source_page_number", 1) == page.page_number
