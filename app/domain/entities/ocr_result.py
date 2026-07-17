@@ -5,7 +5,7 @@ from typing import Any
 @dataclass
 class OCRResult:
     page_number: int = 1
-    engine_name: str = "paddleocr"
+    engine_name: str = "nemotron-parse-v1.2"
     engine_version: str | None = None
     raw_text: str | None = None
     tokens_json: list[dict[str, Any]] | None = None

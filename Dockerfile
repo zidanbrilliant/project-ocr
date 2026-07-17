@@ -5,7 +5,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     libreoffice-writer \
     libgl1 \
     libglib2.0-0 \
@@ -14,15 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ >/etc/timezone
 
-# vLLM/Triton compiles small CUDA helper modules on first model load. Keep the
-# compiler in the runtime image: the compilation happens after the container
-# starts, not while this image is built.
-ENV CC=gcc \
-    CXX=g++ \
-    TRITON_CACHE_DIR=/tmp/triton-cache \
-    PYTHONUNBUFFERED=1
-
-RUN mkdir -p "$TRITON_CACHE_DIR"
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -44,8 +35,5 @@ FROM base AS streamlit
 EXPOSE 8501
 CMD ["streamlit", "run", "scripts/upload_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
 
-FROM base AS qwen
-CMD ["uvicorn", "app.interfaces.api.qwen_main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-FROM base AS paddle
-CMD ["uvicorn", "app.interfaces.api.paddle_main:app", "--host", "0.0.0.0", "--port", "8000"]
+FROM base AS nemotron
+CMD ["uvicorn", "app.interfaces.api.nemotron_main:app", "--host", "0.0.0.0", "--port", "8000"]

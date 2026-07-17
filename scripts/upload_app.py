@@ -118,21 +118,11 @@ async def main_ui() -> None:
 
 def _render_model_status(processor: DirectProcessor) -> None:
     ocr = processor._ocr
-    provider = getattr(ocr, "_provider", settings.OCR_PROVIDER)
-
-    if provider == "qwen":
-        qwen = getattr(ocr, "_qwen", None)
-        if getattr(qwen, "_available", False):
-            st.success("Qwen2.5-VL OCR: ready")
-        else:
-            st.warning(f"Qwen2.5-VL OCR: not loaded ({getattr(qwen, '_load_error', 'warmup pending')})")
-
-    if provider == "paddleocr_vl":
-        paddle = getattr(ocr, "_paddle", None)
-        if getattr(paddle, "_available", False):
-            st.success("PaddleOCR-VL: ready")
-        else:
-            st.warning(f"PaddleOCR-VL: not loaded ({getattr(paddle, '_load_error', 'warmup pending')})")
+    nemotron = getattr(ocr, "_nemotron", None)
+    if getattr(nemotron, "_available", False):
+        st.success("Nemotron Parse: ready")
+    else:
+        st.warning(f"Nemotron Parse: not loaded ({getattr(nemotron, '_load_error', 'warmup pending')})")
 
     yolo_loaded = getattr(processor._yolo, "_loaded", False)
     if yolo_loaded:

@@ -476,7 +476,7 @@ Aturan:
 | FastAPI internal API | Health, readiness, status, result, reprocess |
 | Image Server/Document Server | Sumber dokumen dari `PATH_FILE` |
 | PostgreSQL AI DB | Penyimpanan job dan result |
-| OCR Engine | PaddleOCR utama, fallback EasyOCR/Tesseract |
+| OCR Engine | NVIDIA Nemotron Parse v1.2 |
 | YOLO Detector | Deteksi materai, stamp, signature |
 | Barcode Reader | pyzbar, zxing-cpp, atau OpenCV |
 | File Converter | PDF render dan DOC/DOCX conversion |
@@ -622,7 +622,7 @@ Isi:
 | PostgreSQL repository | SQLAlchemy 2.x |
 | RabbitMQ consumer/publisher | aio-pika |
 | Image server client | httpx dengan timeout dan retry |
-| OCR engine adapter | PaddleOCR adapter |
+| OCR engine adapter | Nemotron Parse adapter |
 | YOLO adapter | Ultralytics adapter |
 | Barcode reader adapter | zxing-cpp atau pyzbar |
 | File converter | PyMuPDF, pdf2image, LibreOffice headless |
@@ -760,7 +760,7 @@ app/
       object_storage_client.py
       temp_file_manager.py
     ocr/
-      paddleocr_adapter.py
+      nemotron_parse_adapter.py
       easyocr_adapter.py
       tesseract_adapter.py
     detection/
@@ -984,7 +984,7 @@ flowchart TD
 
 | OCR Engine | Kelebihan | Kekurangan | Rekomendasi |
 |---|---|---|---|
-| PaddleOCR | Akurat untuk dokumen, support angle classification, GPU support | Setup lebih berat | Main OCR engine |
+| NVIDIA Nemotron Parse | OCR, layout classes, reading order, tables, dan bounding box | NVIDIA GPU | Main OCR engine |
 | EasyOCR | Mudah digunakan, multi-language | Lebih lambat dan kurang stabil untuk layout invoice | Fallback |
 | Tesseract | Ringan dan mature | Akurasi rendah untuk scan buruk dan layout kompleks | Fallback terakhir |
 | VLM OCR | Bisa memahami layout dan konteks | Berat, butuh GPU besar, cost lebih tinggi | Phase lanjut untuk layout-aware extraction |
@@ -995,7 +995,7 @@ Untuk local development dengan RAM 16 GB, RTX 4050, VRAM 6 GB:
 
 | Parameter | Rekomendasi |
 |---|---|
-| OCR engine | PaddleOCR |
+| OCR engine | NVIDIA Nemotron Parse v1.2 |
 | OCR mode | GPU jika stabil, CPU fallback |
 | Batch size | 1 |
 | Max page count | 5 sampai 10 untuk local test |
@@ -1010,7 +1010,7 @@ Untuk production dengan GPU Nvidia DGX atau Nvidia L24 VRAM 24 GB:
 
 | Parameter | Rekomendasi |
 |---|---|
-| OCR engine | PaddleOCR GPU |
+| OCR engine | NVIDIA Nemotron Parse GPU |
 | Batch size | 1 sampai 4 berdasarkan benchmark |
 | PDF DPI | 200 sampai 300 DPI |
 | Worker count | 2 sampai 4 per GPU, disesuaikan VRAM |
@@ -1117,15 +1117,15 @@ field_confidence =
 
 Fallback dilakukan jika:
 
-1. PaddleOCR gagal runtime.
-2. PaddleOCR menghasilkan empty text.
+1. Nemotron Parse gagal runtime.
+2. Nemotron Parse menghasilkan empty text.
 3. OCR confidence rata-rata < threshold.
 4. Field wajib tidak ditemukan.
 
 Urutan fallback:
 
-1. PaddleOCR original image.
-2. PaddleOCR preprocessed image.
+1. Nemotron Parse original image.
+2. Nemotron Parse preprocessed image.
 3. EasyOCR preprocessed image.
 4. Tesseract only for clear printed text.
 
@@ -1627,7 +1627,7 @@ Untuk MVP, satu message RabbitMQ dapat memproses satu dokumen. Desain database t
 | job_id | UUID | Tidak | ai_jobs.id | Ya | Tidak | Referensi job |
 | document_pk | UUID | Tidak | ai_documents.id | Ya | Tidak | Referensi dokumen |
 | page_number | INTEGER | Tidak | Tidak | Ya | Tidak | Nomor halaman |
-| engine_name | VARCHAR(50) | Tidak | Tidak | Tidak | Tidak | OCR engine, contoh `PaddleOCR` |
+| engine_name | VARCHAR(50) | Tidak | Tidak | Tidak | Tidak | OCR engine, contoh `nemotron-parse-v1.2` |
 | engine_version | VARCHAR(50) | Tidak | Tidak | Tidak | Ya | Version OCR engine |
 | raw_text | TEXT | Tidak | Tidak | Tidak | Ya | Raw text hasil OCR |
 | tokens_json | JSONB | Tidak | Tidak | Tidak | Ya | Token OCR, confidence, dan coordinate jika tersedia |
@@ -2239,7 +2239,7 @@ Response:
 ```json
 {
   "ocr": {
-    "engine": "PaddleOCR",
+    "engine": "nemotron-parse-v1.2",
     "version": "2.7",
     "use_gpu": true
   },
@@ -2979,8 +2979,8 @@ Payload final ke RabbitMQ tetap ringkas. Detail lengkap tidak dikirim ke RabbitM
 | Database | PostgreSQL | JSONB, transaction, audit | Docker Compose | HA PostgreSQL |
 | ORM | SQLAlchemy 2.x | Modern async support | Sync atau async | Async recommended |
 | Migration | Alembic | Standard migration Python | Local migration | CI/CD migration |
-| OCR engine | PaddleOCR | Akurat dan GPU support | GPU optional | GPU enabled |
-| OCR fallback | EasyOCR, Tesseract | Fallback ketika PaddleOCR gagal | CPU fallback | CPU fallback |
+| OCR engine | NVIDIA Nemotron Parse v1.2 | OCR, layout, table, bounding box | GPU required | GPU enabled |
+| OCR fallback | Native PDF text layer | Digunakan sebelum OCR visual | CPU | CPU |
 | Object detection | Ultralytics YOLO | Model existing compatible | `.pt` | `.pt`, ONNX, or TensorRT |
 | Barcode engine | zxing-cpp | Decoding kuat | zxing-cpp + pyzbar | zxing-cpp primary |
 | Image processing | OpenCV | Preprocessing lengkap | CPU | CPU plus GPU optional |
@@ -3005,7 +3005,7 @@ MVP stack:
 5. SQLAlchemy 2.x.
 6. Alembic.
 7. Pydantic Settings.
-8. PaddleOCR-VL 1.6.
+8. NVIDIA Nemotron Parse v1.2.
 9. Ultralytics YOLO.
 10. OpenCV.
 11. PyMuPDF.
@@ -3229,7 +3229,7 @@ Worker harus:
 | YOLO_INPUT_SIZE | Ya | 640 | YOLO input size |
 | YOLO_CONFIDENCE_THRESHOLD | Ya | 0.25 | YOLO confidence threshold |
 | YOLO_NMS_THRESHOLD | Ya | 0.45 | NMS threshold |
-| OCR_ENGINE | Ya | paddleocr | OCR engine |
+| OCR_ENGINE | Ya | nemotron | OCR engine |
 | OCR_USE_GPU | Ya | true | OCR GPU mode |
 | OCR_FALLBACK_ENABLED | Ya | true | Enable OCR fallback |
 | CONFIDENCE_THRESHOLD | Ya | 80 | Final confidence threshold |
@@ -3626,7 +3626,7 @@ Target:
 2. Document download dari `PATH_FILE`.
 3. Basic validation.
 4. PDF, JPG, JPEG, PNG support.
-5. PaddleOCR.
+5. NVIDIA Nemotron Parse.
 6. YOLO detection untuk existing class.
 7. Barcode fallback basic.
 8. Field extraction basic.
@@ -3730,7 +3730,7 @@ Deliverable:
 
 | Risk | Impact | Probability | Mitigation | Owner |
 |---|---|---:|---|---|
-| OCR tidak akurat | Field salah, false OK atau false NG | Medium | PaddleOCR, preprocessing, fallback OCR, manual review threshold | AI/ML |
+| OCR tidak akurat | Field salah, false OK atau false NG | Medium | Nemotron Parse, preprocessing, native PDF text, manual review threshold | AI/ML |
 | Dokumen blur | OCR dan detection gagal | High | Document quality scoring dan DOCUMENT_ERROR untuk low quality | AI/ML |
 | Format dokumen bervariasi | Parser gagal | High | Layout-aware extraction dan configurable regex | Backend, AI/ML |
 | Barcode belum ada di model YOLO | Barcode detection tidak optimal | High | MVP pakai zxing-cpp, Phase 2 retrain YOLO | AI/ML |
@@ -3942,7 +3942,7 @@ Urutan implementasi yang disarankan:
 ```json
 {
   "ocr": {
-    "engine": "PaddleOCR",
+    "engine": "nemotron-parse-v1.2",
     "version": "2.7",
     "language": "en",
     "use_gpu": true

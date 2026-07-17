@@ -24,7 +24,7 @@ Streamlit upload
   -> ImagePreprocessor
   -> DocumentOCR
        -> pypdf text extraction for searchable PDFs, when enabled
-       -> PaddleOCR-VL or Qwen2.5-VL for page OCR
+       -> NVIDIA Nemotron Parse v1.2 for scanned-page OCR and layout
   -> YOLOAdapter
   -> BarcodeFallbackChain
   -> FieldExtractionService
@@ -33,24 +33,11 @@ Streamlit upload
   -> Streamlit result tabs
 ```
 
-The selected OCR provider is controlled by `OCR_PROVIDER`. DGX Spark standalone Docker defaults to `paddleocr_vl`; Streamlit calls the dedicated `paddle-ocr` container so only one process owns the model and GPU memory.
+The only OCR model provider is `nemotron`. Streamlit calls the dedicated `nemotron` container so one process owns the model and GPU memory.
 
-| Provider | Value | Model path |
-|---|---|---|
-| PaddleOCR-VL | `paddleocr_vl` | `PADDLEOCR_VL_MODEL_DIR=/mnt/models/PaddleOCR-VL-1.6` |
-| Qwen2.5-VL | `qwen` | `VLM_MODEL_PATH=/mnt/models/Qwen2.5-VL-7B-Instruct-AWQ` |
+Nemotron uses `NEMOTRON_MODEL_DIR=/mnt/models/Nemotron-Parse-v1.2`, runs with local-only Transformers weights, and returns reading-order text, semantic classes, bounding boxes, and structured blocks. If it cannot load, OCR returns an explicit error and Streamlit shows the failure.
 
-PaddleOCR-VL POC defaults target `pipeline_version=v1.6`, `engine=transformers`, `device=gpu`, and layout-aware structured output.
-
-Use `qwen` only when the Qwen/vLLM runtime is available.
-
-EasyOCR is not part of the testing pipeline. If the selected provider cannot load, OCR returns an explicit error and the Streamlit UI shows the failure.
-
-## Optional Reasoning
-
-Qwen reasoning is controlled separately with `ENABLE_QWEN_REASONING`.
-
-When disabled, the pipeline uses deterministic field extraction and business rules only. When enabled, `DirectProcessor` warms up a Qwen adapter and adds a `reasoning` block to the raw result based on page image, OCR text, extracted fields, and YOLO detections.
+Field extraction and business-rule evaluation remain deterministic; no second VLM is loaded.
 
 ## Production Worker Flow
 
@@ -87,7 +74,7 @@ app/
     database/          SQLAlchemy models and repositories
     detection/         YOLO adapter and detection mapper
     document_converter PDF/image/Word conversion and preprocessing
-    ocr/               DocumentOCR, PaddleOCR-VL, Qwen2.5-VL
+    ocr/               DocumentOCR and Nemotron Parse adapter
     rabbitmq/          production broker adapters
     storage/           image server and temp file adapters
   interfaces/          FastAPI routes and schemas
@@ -114,4 +101,4 @@ For local non-Docker testing:
 streamlit run scripts/upload_app.py
 ```
 
-The local Python environment must already have the correct vLLM or PaddleOCR/PaddlePaddle packages for the selected provider. On DGX Spark `aarch64`, the default standalone provider is PaddleOCR-VL, with the v1.6 POC using the Transformers engine first.
+The local Python environment must have the pinned Nemotron Transformers dependencies. DGX Docker uses the NGC PyTorch base image and mounts the model read-only from `/mnt/models/Nemotron-Parse-v1.2`.

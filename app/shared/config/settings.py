@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     YOLO_HIGH_RES_INPUT_SIZE: int = 960
     YOLO_BATCH_SIZE: int = 2
 
-    OCR_PROVIDER: Literal["qwen", "paddleocr_vl"] = "paddleocr_vl"
+    OCR_PROVIDER: Literal["nemotron"] = "nemotron"
     OCR_ENABLE_PDF_TEXT_EXTRACTION: bool = True
 
     CONFIDENCE_THRESHOLD: int = 80
@@ -69,22 +69,8 @@ class Settings(BaseSettings):
     RETRY_BACKOFF_MULTIPLIER: int = 2
 
     WORKER_PREFETCH_COUNT: int = 1
-    VLM_MODEL_PATH: str = ""
-    VLM_MAX_TOKENS: int = 2048
-    VLM_GPU_MEMORY_UTILIZATION: float = 0.20
-    QWEN_SERVICE_URL: str = ""
-    QWEN_MAX_MODEL_LEN: int = 4096
-    QWEN_MAX_NUM_SEQS: int = 1
-    PADDLEOCR_VL_MODEL_DIR: str = "/mnt/models/PaddleOCR-VL-1.6"
-    PADDLEOCR_VL_SERVICE_URL: str = ""
-    PADDLEOCR_VL_PIPELINE_VERSION: str = "v1.6"
-    PADDLEOCR_VL_ENGINE: str = "transformers"
-    PADDLEOCR_VL_DEVICE: str = "gpu"
-    PADDLEOCR_VL_USE_LAYOUT_DETECTION: bool = True
-    PADDLEOCR_VL_FORMAT_BLOCK_CONTENT: bool = True
-    PADDLEOCR_VL_USE_QUEUES: bool = True
-
-    ENABLE_QWEN_REASONING: bool = False
+    NEMOTRON_MODEL_DIR: str = "/mnt/models/Nemotron-Parse-v1.2"
+    NEMOTRON_SERVICE_URL: str = ""
     TEST_RESULT_DIR: str = "artifacts/results"
 
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"

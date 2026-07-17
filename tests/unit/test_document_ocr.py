@@ -15,14 +15,13 @@ from app.infrastructure.ocr.document_ocr import DocumentOCR
 
 def test_warmup_raises_when_selected_provider_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     ocr = DocumentOCR()
-    ocr._provider = "qwen"
-    ocr._qwen._available = False
-    ocr._qwen._load_error = "missing model"
+    ocr._nemotron._available = False
+    ocr._nemotron._load_error = "missing model"
 
     async def fake_warmup() -> None:
         return None
 
-    monkeypatch.setattr(ocr._qwen, "warmup", fake_warmup)
+    monkeypatch.setattr(ocr._nemotron, "warmup", fake_warmup)
 
     with pytest.raises(RuntimeError, match="missing model"):
         asyncio.run(ocr.warmup())

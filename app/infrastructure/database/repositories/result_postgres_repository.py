@@ -63,7 +63,7 @@ class ResultPostgresRepository:
             job_id=job_id,
             document_pk=document_pk,
             page_number=data.get("page_number", 1),
-            engine_name=data.get("engine_name", "paddleocr"),
+            engine_name=data.get("engine_name", "nemotron-parse-v1.2"),
             engine_version=data.get("engine_version"),
             raw_text=data.get("raw_text"),
             tokens_json=data.get("tokens_json"),

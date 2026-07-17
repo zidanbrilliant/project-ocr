@@ -16,17 +16,16 @@ Default testing config:
 - `RUN_MODE=standalone`
 - `ENABLE_RABBITMQ=false`
 - `ENABLE_DATABASE=false`
-- `OCR_PROVIDER=paddleocr_vl`
-- `ENABLE_QWEN_REASONING=false`
-- `PADDLEOCR_VL_SERVICE_URL=http://paddle-ocr:8000` (in Compose)
+- `OCR_PROVIDER=nemotron`
+- `NEMOTRON_SERVICE_URL=http://nemotron:8000` (in Compose)
 
 Every Streamlit upload now shows the canonical result JSON in **Result JSON**,
 offers it for download, and saves the same payload in `artifacts/results/`.
 This is the payload shape intended for the RabbitMQ result flow; it is kept
 additive so fields can evolve without breaking testing.
 
-DGX Spark standalone Docker starts one shared PaddleOCR-VL service. The model
-directory configured by `PADDLEOCR_VL_MODEL_DIR` must exist under `/mnt/models`.
+DGX Spark standalone Docker starts one shared NVIDIA Nemotron Parse service. The model
+directory configured by `NEMOTRON_MODEL_DIR` must exist under `/mnt/models`.
 Streamlit remains accessible and reports OCR unavailable when the model is absent.
 
 ## Pipeline
@@ -39,9 +38,7 @@ RabbitMQ -> request normalizer -> AI pipeline orchestrator -> PostgreSQL result/
 
 ## Main Adapters
 
-- OCR: `DocumentOCR` with explicit provider `paddleocr_vl` or `qwen`
-- PaddleOCR-VL: default standalone OCR adapter
-- Qwen2.5-VL: optional reasoning adapter
+- OCR: native PDF text extraction plus NVIDIA Nemotron Parse v1.2 for scanned pages
 - Detection: Ultralytics YOLO
 - Barcode: zxing-cpp, pyzbar, OpenCV fallback chain
 - UI: Streamlit direct upload

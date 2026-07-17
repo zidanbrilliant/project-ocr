@@ -8,7 +8,7 @@ class _PageImage:
 def test_result_payload_contains_ocr_fields_and_normalized_detection_box() -> None:
     raw = {
         "status": "OK", "doc_type": "INV", "pages": [_PageImage()],
-        "_page_ocrs": [{"engine_name": "paddleocr-vl", "raw_text": "INV-1", "average_confidence": 90, "tokens_json": [{"text": "INV-1", "confidence": 90, "bbox": [1, 2, 3, 4]}]}],
+        "_page_ocrs": [{"engine_name": "nemotron-parse-v1.2", "raw_text": "INV-1", "average_confidence": None, "tokens_json": [{"text": "INV-1", "confidence": None, "bbox": [1, 2, 3, 4]}]}],
         "fields": {"document_number": {"value": "INV-1", "raw_value": "INV-1", "confidence": 90, "extraction_method": "regex"}},
         "detections": [{"class_id": 3, "object_type": "stamp", "confidence": 90, "page_number": 1, "bounding_box": [20, 10, 120, 60], "normalized_bounding_box": [0.1, 0.1, 0.6, 0.6]}],
     }

@@ -46,7 +46,7 @@ def _png_bytes() -> bytes:
     return b"fake-rendered-page"
 
 
-def test_pdf_text_falls_back_when_qwen_page_ocr_is_blank(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pdf_text_falls_back_when_page_ocr_is_blank(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dp, "setup_logging", lambda: None)
     processor = dp.DirectProcessor()
 
@@ -71,7 +71,7 @@ def test_pdf_text_falls_back_when_qwen_page_ocr_is_blank(monkeypatch: pytest.Mon
                     "average_confidence": 95.0,
                 }
             return {
-                "engine_name": "qwen2.5-vl",
+                "engine_name": "nemotron-parse-v1.2",
                 "raw_text": "",
                 "tokens_json": [],
                 "average_confidence": 0.0,
