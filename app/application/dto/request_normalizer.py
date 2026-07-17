@@ -51,7 +51,12 @@ def normalize_legacy_request(payload: dict[str, Any]) -> NormalizedJobRequest:
 
 def normalize_batch_request(payload: dict[str, Any]) -> NormalizedJobRequest:
     """Convert batch multi-document format to NormalizedJobRequest."""
-    context = payload.get("business_context", payload.get("context", {})) or {}
+    context = dict(payload.get("business_context", payload.get("context", {})) or {})
+    # The current request contract keeps these values at the root. Preserve them
+    # once so business validation never has to inspect the raw message again.
+    for key in ("vendor_name", "vendor_code", "total_amount", "created_datetime", "transaction_type"):
+        if key in payload and key not in context:
+            context[key] = payload[key]
     queue_id = payload.get("queue_no", payload.get("QUEUE_ID")) or generate_queue_id()
     message_id = payload.get("message_id", payload.get("MESSAGE_ID", f"MSG-{uuid.uuid4().hex[:12]}"))
 

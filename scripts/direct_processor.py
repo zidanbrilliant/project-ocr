@@ -251,6 +251,8 @@ class DirectProcessor:
             )
             ocr_entity.billing_number = ocr_raw.get("billing_number") or (fields.get("billing_number", {}).get("value"))
             ocr_entity.transaction_amount = ocr_raw.get("transaction_amount") or amount
+            ocr_entity.vendor_name = fields.get("vendor_name", {}).get("value")
+            ocr_entity.transaction_date = fields.get("transaction_date", {}).get("value")
             ocr_entity.invoice_confidence = ocr_raw.get("invoice_confidence") or fields.get("document_number", {}).get(
                 "confidence"
             )
@@ -269,6 +271,7 @@ class DirectProcessor:
                     detections=list(aggregated.values()),
                     amount=amount,
                     confidence=ocr_raw.get("average_confidence"),
+                    business_context=None,
                 )
 
             total_conf = self._conf_scorer.calculate(
@@ -294,6 +297,11 @@ class DirectProcessor:
                     for r in validation.failed_rules
                 ],
             }
+            result["document_summary"] = await self._field_reasoning.summarize(
+                overall,
+                fields,
+                result["validation"]["failed_rules"],
+            )
 
             if barcode_raw.get("barcode_decoded"):
                 barcode_score = 100.0

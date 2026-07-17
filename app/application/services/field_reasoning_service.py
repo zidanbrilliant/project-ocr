@@ -13,6 +13,14 @@ _FIELD_DEFINITIONS = {
     "vendor_name": "seller, supplier, or issuer; not buyer or recipient",
 }
 
+_REASON_CODES = {
+    "document_number": {"COMMERCIAL_DOCUMENT_NUMBER"},
+    "billing_number": {"BILLING_REFERENCE"},
+    "transaction_amount": {"FINAL_PAYABLE_TOTAL"},
+    "transaction_date": {"DOCUMENT_ISSUE_DATE"},
+    "vendor_name": {"SELLER_OR_ISSUER"},
+}
+
 
 class FieldReasoningService:
     """Resolve only conflicting OCR candidates and preserve their evidence."""
@@ -56,6 +64,7 @@ class FieldReasoningService:
                     "label": item.get("source_label"),
                     "source_text": str(item.get("source_text", ""))[:500],
                     "page": item.get("source_page_number"),
+                    "block_id": item.get("source_block_id"),
                 })
             candidate_index[name] = indexed
             payload_fields[name] = public_items
@@ -77,10 +86,13 @@ class FieldReasoningService:
             if item is None:
                 continue
             chosen = dict(item)
+            reason_code = str(decision.get("reason_code", ""))
+            if reason_code not in _REASON_CODES.get(name, set()):
+                reason_code = "MODEL_SELECTED_CANDIDATE"
             chosen.update({
                 "status": "FOUND",
-                "confidence": min(1.0, max(0.0, float(decision.get("confidence", chosen["confidence"])))),
-                "reason_code": str(decision.get("reason_code", "MODEL_SELECTED_CANDIDATE")),
+                # Model confidence is not calibrated. Preserve deterministic evidence score.
+                "reason_code": reason_code,
                 "reasoning_engine": "qwen3.5-9b",
             })
             resolved[name] = chosen
@@ -92,3 +104,30 @@ class FieldReasoningService:
             "resolved_fields": applied,
             "error": reply.get("error"),
         }
+
+    async def summarize(
+        self, document_result: str, fields: dict[str, dict[str, Any]], failed_rules: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        failed_items = [str(rule.get("rule_name", "Validation failed")) for rule in failed_rules]
+        fallback = {
+            "result": document_result,
+            "failed_items": failed_items,
+            "reason": "Verification passed." if not failed_items else "; ".join(failed_items[:3]),
+            "recommendations": [],
+            "engine": "deterministic",
+        }
+        summarize = getattr(self._adapter, "summarize", None)
+        if not settings.REASONING_ENABLED or not self._adapter.is_available or not callable(summarize):
+            return fallback
+        reply = await summarize({
+            "document_result": document_result,
+            "verified_fields": {name: field.get("value") for name, field in fields.items()},
+            "failed_rules": [{"rule_id": rule.get("rule_id"), "rule_name": rule.get("rule_name")} for rule in failed_rules],
+        })
+        rule_ids = reply.get("rule_ids")
+        summary = reply.get("summary")
+        allowed = {str(rule.get("rule_id")) for rule in failed_rules}
+        received = {str(item) for item in rule_ids} if isinstance(rule_ids, list) else set()
+        if isinstance(summary, str) and 0 < len(summary) <= 500 and received == allowed:
+            return {**fallback, "reason": summary, "engine": "qwen3.5-9b"}
+        return fallback

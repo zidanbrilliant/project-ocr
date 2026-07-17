@@ -17,10 +17,10 @@ _MONTHS = {
 
 # Order matters: the first matching amount label is the intended business role.
 _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
-    "document_number": (("invoice number", 1.0), ("invoice no", 1.0), ("nomor invoice", 1.0), ("no invoice", 1.0), ("no faktur", 0.95), ("faktur penjualan", 0.9), ("invoice", 0.8)),
-    "billing_number": (("billing number", 1.0), ("billing no", 1.0), ("nomor billing", 1.0), ("no tagihan", 0.95), ("kode billing", 0.9)),
+    "document_number": (("invoice number", 1.0), ("invoice no", 1.0), ("nomor invoice", 1.0), ("no invoice", 1.0), ("nomor faktur", 0.98), ("no faktur", 0.95), ("faktur penjualan", 0.9), ("invoice", 0.8)),
+    "billing_number": (("billing number", 1.0), ("billing no", 1.0), ("nomor billing", 1.0), ("no tagihan", 0.95), ("kode billing", 0.9), ("payment reference", 0.85)),
     "transaction_amount": (("grand total", 1.0), ("total bayar", 0.98), ("amount due", 0.98), ("nilai tagihan", 0.96), ("total amount", 0.95), ("total", 0.75), ("subtotal", 0.35), ("sub total", 0.35), ("dpp", 0.2), ("ppn", 0.15)),
-    "transaction_date": (("invoice date", 1.0), ("tanggal invoice", 1.0), ("tanggal faktur", 0.95), ("date", 0.75), ("tanggal", 0.75), ("tgl", 0.7)),
+    "transaction_date": (("invoice date", 1.0), ("tanggal invoice", 1.0), ("tanggal faktur", 0.95), ("document date", 0.9), ("date", 0.75), ("tanggal", 0.75), ("tgl", 0.7)),
     "vendor_name": (("vendor", 1.0), ("supplier", 1.0), ("pemasok", 1.0), ("penjual", 0.95), ("seller", 0.95)),
 }
 
@@ -55,43 +55,52 @@ class FieldExtractionService:
     def _candidates(self, page: dict[str, Any], doc_type: str | None) -> dict[str, list[dict[str, Any]]]:
         candidates: dict[str, list[dict[str, Any]]] = {}
         tokens = page.get("tokens_json", []) or []
-        lines: list[tuple[str, Any]] = []
-        for token in tokens:
-            lines.extend((line.strip(), token.get("bbox")) for line in str(token.get("text", "")).splitlines() if line.strip())
+        lines: list[tuple[str, Any, str]] = []
+        for token_index, token in enumerate(tokens):
+            block_id = str(token.get("block_id") or f"b{token_index + 1}")
+            lines.extend(
+                (line.strip(), token.get("bbox"), block_id)
+                for line in str(token.get("text", "")).splitlines()
+                if line.strip()
+            )
         if not lines:
             raw_text = page.get("raw_text", "") or ""
-            lines = [(line.strip(), None) for line in raw_text.splitlines() if line.strip()]
+            lines = [(line.strip(), None, f"line-{index + 1}") for index, line in enumerate(raw_text.splitlines()) if line.strip()]
 
-        for line, bbox in lines:
+        for line, bbox, block_id in lines:
             label, value = self._split_label_value(line)
             if label and value:
-                self._add_labeled(candidates, label, value, bbox, "label_value", doc_type)
+                self._add_labeled(candidates, label, value, bbox, "label_value", doc_type, block_id)
 
         # Nemotron may emit a label and its value in adjacent semantic blocks.
         for index, token in enumerate(tokens[:-1]):
             label = str(token.get("text", "")).strip()
             value = str(tokens[index + 1].get("text", "")).strip()
             if label and value and self._spatially_related(token.get("bbox"), tokens[index + 1].get("bbox")):
-                self._add_labeled(candidates, label, value, tokens[index + 1].get("bbox"), "spatial_label_value", doc_type)
+                self._add_labeled(
+                    candidates, label, value, tokens[index + 1].get("bbox"), "spatial_label_value", doc_type,
+                    str(tokens[index + 1].get("block_id") or f"b{index + 2}"),
+                )
 
         # Conservative fallback: document numbers must keep an invoice/faktur prefix;
         # money must carry an Rp marker. Bare numbers are never guessed as totals.
-        for line, bbox in lines:
+        for line, bbox, block_id in lines:
             if "document_number" not in candidates:
                 match = re.search(
                     r"(?i)\b(?:invoice|faktur(?:\s+penjualan)?)\s*(?:no\.?|number|nomor)?\s*[:#\-]?\s*([A-Z0-9][A-Z0-9/.\-]{2,})",
                     line,
                 ) or re.search(r"(?i)\b((?:INV|FAK)[\s/\-]*[0-9][A-Z0-9/.\-]*)", line)
                 if match:
-                    self._add(candidates, "document_number", match.group(1), 0.45, bbox, "pattern", line)
+                    self._add(candidates, "document_number", match.group(1), 0.45, bbox, "pattern", line, source_block_id=block_id)
             if "transaction_amount" not in candidates and re.search(r"(?i)\brp\.?\s*\d", line):
                 value = self._money(line)
                 if value is not None:
-                    self._add(candidates, "transaction_amount", value, 0.4, bbox, "currency_pattern", line, currency="IDR")
+                    self._add(candidates, "transaction_amount", value, 0.4, bbox, "currency_pattern", line, source_block_id=block_id, currency="IDR")
         return candidates
 
     def _add_labeled(
-        self, candidates: dict[str, list[dict[str, Any]]], label: str, value: str, bbox: Any, method: str, doc_type: str | None
+        self, candidates: dict[str, list[dict[str, Any]]], label: str, value: str, bbox: Any, method: str,
+        doc_type: str | None, block_id: str,
     ) -> None:
         normalized = self._normal(label)
         for name, options in _LABELS.items():
@@ -99,7 +108,7 @@ class FieldExtractionService:
                 if alias in normalized:
                     parsed = self._parse(name, value)
                     if parsed is not None and self._allowed(name, normalized, doc_type):
-                        self._add(candidates, name, parsed, score, bbox, method, f"{label}: {value}", label, value)
+                        self._add(candidates, name, parsed, score, bbox, method, f"{label}: {value}", label, value, source_block_id=block_id)
                     return
 
     @staticmethod
@@ -171,7 +180,7 @@ class FieldExtractionService:
     @staticmethod
     def _spatially_related(label_bbox: Any, value_bbox: Any) -> bool:
         if not label_bbox or not value_bbox or len(label_bbox) != 4 or len(value_bbox) != 4:
-            return True
+            return False
         lx1, ly1, lx2, ly2 = label_bbox
         vx1, vy1, vx2, vy2 = value_bbox
         same_row = abs(((ly1 + ly2) - (vy1 + vy2)) / 2) <= max(20, (ly2 - ly1) * 1.5)

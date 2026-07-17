@@ -23,6 +23,9 @@ class _Adapter:
             ]
         }
 
+    async def summarize(self, request):
+        return {"summary": "Amount must match PV amount.", "rule_ids": ["INV-R009"]}
+
 
 def test_reasoning_can_only_select_existing_candidate(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
@@ -39,3 +42,12 @@ def test_reasoning_can_only_select_existing_candidate(monkeypatch) -> None:
     assert resolved["transaction_amount"]["value"] == 110.0
     assert resolved["transaction_amount"]["reasoning_engine"] == "qwen3.5-9b"
     assert audit["resolved_fields"] == ["transaction_amount"]
+
+
+def test_summary_accepts_only_known_rule_ids(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    service = FieldReasoningService(_Adapter())
+    summary = asyncio.run(service.summarize("NG", {}, [{"rule_id": "INV-R009", "rule_name": "Amount must match PV amount"}]))
+
+    assert summary["engine"] == "qwen3.5-9b"
+    assert summary["result"] == "NG"

@@ -215,8 +215,8 @@ def _display_results(ui_result: dict) -> None:
         f"{doc.get('size_kb', 0)} KB"
     )
 
-    preview_tab, ocr_tab, detection_tab, fields_tab, confidence_tab, json_tab = st.tabs(
-        ["Preview", "OCR", "Detection", "Fields", "Confidence", "Result JSON"]
+    preview_tab, ocr_tab, detection_tab, fields_tab, summary_tab, confidence_tab, json_tab = st.tabs(
+        ["Preview", "OCR", "Detection", "Fields", "Summary", "Confidence", "Result JSON"]
     )
 
     with preview_tab:
@@ -227,6 +227,8 @@ def _display_results(ui_result: dict) -> None:
         _render_detection(selected_page, selected_index)
     with fields_tab:
         _render_fields(selected_page)
+    with summary_tab:
+        _render_summary(ui_result)
     with confidence_tab:
         _render_confidence(ui_result, selected_page)
     with json_tab:
@@ -336,13 +338,26 @@ def _render_fields(page: dict) -> None:
             {
                 "Field": name,
                 "Value": str(value),
-                "Confidence": f"{confidence}%" if isinstance(confidence, (int, float)) else confidence,
+                "Confidence": f"{confidence * 100:.1f}%" if isinstance(confidence, (int, float)) else confidence,
                 "Status": field_data.get("status", "?"),
                 "Selected by": field_data.get("reasoning_engine", "deterministic"),
                 "Reason": field_data.get("reason_code", ""),
+                "Evidence": field_data.get("source_text", ""),
+                "Block": field_data.get("source_block_id", ""),
             }
         )
     st.table(rows)
+
+
+def _render_summary(ui_result: dict) -> None:
+    payload = ui_result["rabbitmq_preview"]
+    document = payload["documents"][0]
+    summary = document.get("document_summary") or {}
+    st.metric("Result", summary.get("result", document.get("processing_result", "?")))
+    st.write(summary.get("reason", "No summary available."))
+    if summary.get("failed_items"):
+        st.error("Failed: " + ", ".join(summary["failed_items"]))
+    st.caption(f"Summary engine: {summary.get('engine', 'deterministic')}")
 
 
 def _render_confidence(ui_result: dict, page: dict) -> None:

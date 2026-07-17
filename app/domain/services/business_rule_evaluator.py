@@ -1,4 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import date, datetime
+import re
 from typing import Any
 
 from app.domain.entities.business_validation_result import BusinessValidationResult, FailedRule
@@ -22,6 +24,7 @@ class RuleConfig:
     required_stamp_count: int = 2
     require_colored_stamp: bool = True
     confidence_threshold: int = 80
+    amount_match_tolerance: float = 0.0
     min_object_confidence: float = 0.25
 
 
@@ -36,6 +39,7 @@ class BusinessRuleEvaluator:
             required_signature_count=settings.DELIVERY_NOTE_REQUIRED_SIGNATURE_COUNT,
             required_stamp_count=settings.DELIVERY_NOTE_REQUIRED_STAMP_COUNT,
             confidence_threshold=settings.CONFIDENCE_THRESHOLD,
+            amount_match_tolerance=settings.AMOUNT_MATCH_TOLERANCE,
         )
 
     def validate_invoice(
@@ -44,6 +48,7 @@ class BusinessRuleEvaluator:
         detections: list[DetectionResult],
         amount: float | None,
         confidence: float | None,
+        business_context: dict[str, Any] | None = None,
     ) -> BusinessValidationResult:
         failed: list[FailedRule] = []
 
@@ -60,7 +65,7 @@ class BusinessRuleEvaluator:
             d.result == "OK" and d.object_type == "materai" for d in detections
         )
         if self._config.require_materai_above_threshold and amount is not None:
-            if amount > self._config.amount_stamp_duty_threshold and not materai_detected:
+            if amount >= self._config.amount_stamp_duty_threshold and not materai_detected:
                 failed.append(FailedRule("INV-R004", "Materai required above threshold", "Above Rp. 5.000.000. Missing Stamp Duty."))
 
         stamp_detected = any(d.result == "OK" and d.object_type == "stamp" for d in detections)
@@ -77,6 +82,22 @@ class BusinessRuleEvaluator:
 
         if confidence is not None and confidence < self._config.confidence_threshold:
             failed.append(FailedRule("INV-R008", "Confidence below threshold", "AI confidence below threshold. Manual verification required."))
+
+        context = business_context or {}
+        expected_amount = _as_number(context.get("total_amount"))
+        if expected_amount is not None and amount is not None and abs(expected_amount - amount) > self._config.amount_match_tolerance:
+            failed.append(FailedRule("INV-R009", "Amount must match PV amount", "Document amount does not match PV amount."))
+
+        expected_vendor = str(context.get("vendor_name") or "").strip()
+        if expected_vendor and ocr.vendor_name and not _same_vendor(expected_vendor, ocr.vendor_name):
+            failed.append(FailedRule("INV-R010", "Vendor must match PV vendor", "Document vendor does not match PV vendor."))
+
+        request_date = _as_date(context.get("created_datetime"))
+        document_date = _as_date(ocr.transaction_date)
+        if request_date and document_date:
+            allowed_months = 2 if str(context.get("transaction_type", "")).upper() == "REIMBURSEMENT_TOLL" else 6
+            if document_date < _subtract_months(request_date, allowed_months) or document_date > request_date:
+                failed.append(FailedRule("INV-R011", "Transaction date within permitted period", "Document date is outside the permitted transaction period."))
 
         passed = len(failed) == 0
         return BusinessValidationResult(
@@ -117,3 +138,40 @@ class BusinessRuleEvaluator:
         if not failed:
             return "Verification failed."
         return "; ".join(f.message for f in failed)
+
+
+def _as_number(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+    except ValueError:
+        try:
+            return date.fromisoformat(str(value))
+        except ValueError:
+            return None
+
+
+def _subtract_months(value: date, months: int) -> date:
+    month = value.month - months
+    year = value.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    # Day 1 is sufficient because the rule is month-based, not 30-day based.
+    return date(year, month, 1)
+
+
+def _same_vendor(expected: str, actual: str) -> bool:
+    def normalized(value: str) -> str:
+        value = re.sub(r"\b(pt|cv|tbk|persero)\b", "", value.lower())
+        return re.sub(r"[^a-z0-9]", "", value)
+
+    return normalized(expected) == normalized(actual)

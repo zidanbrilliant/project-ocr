@@ -212,8 +212,15 @@ class AIPipelineOrchestrator:
                 "confidence": dr.confidence,
                 "fields": dr.extracted_fields,
                 "reasoning": dr.reasoning,
+                "document_summary": dr.document_summary,
                 "detections": dr.detections,
                 "validation": dr.validations,
+                "business_rule": {
+                    "rule_version": "v1.0",
+                    "rules_passed": 0,
+                    "rules_failed": len(dr.validations),
+                    "rules": dr.validations,
+                },
                 "pages": [
                     {
                         "page_index": p.page_index,
@@ -435,6 +442,8 @@ class AIPipelineOrchestrator:
             ocr_entity.transaction_amount = (
                 fields.get("transaction_amount", {}).get("value") if fields.get("transaction_amount") else None
             )
+            ocr_entity.vendor_name = fields.get("vendor_name", {}).get("value")
+            ocr_entity.transaction_date = fields.get("transaction_date", {}).get("value")
 
             det_entities = [map_to_entity(d) for d in raw_detections]
             aggregated = aggregate_per_object_type(det_entities)
@@ -449,6 +458,7 @@ class AIPipelineOrchestrator:
                     detections=list(aggregated.values()),
                     amount=amount,
                     confidence=ocr_aggregated.get("average_confidence"),
+                    business_context=req.business_context,
                 )
 
             # Take first barcode
@@ -482,6 +492,7 @@ class AIPipelineOrchestrator:
                 {"rule_id": rule.rule_id, "rule_name": rule.rule_name, "result": "FAILED", "reason": rule.message}
                 for rule in validation.failed_rules
             ]
+            result.document_summary = await self._field_reasoning.summarize(doc_result, fields, result.validations)
             result.confidence = total_conf
             result.processing_status = statuses.FAILED if ocr_errors else statuses.COMPLETED
             result.processing_result = statuses.INTERNAL_ERROR if ocr_errors else statuses.SUCCESS

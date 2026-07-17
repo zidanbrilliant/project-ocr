@@ -23,3 +23,8 @@ async def health() -> dict[str, Any]:
 @router.post("/select")
 async def select(request: dict[str, Any]) -> dict[str, Any]:
     return await _adapter.select(request)
+
+
+@router.post("/summarize")
+async def summarize(request: dict[str, Any]) -> dict[str, Any]:
+    return await _adapter.summarize(request)

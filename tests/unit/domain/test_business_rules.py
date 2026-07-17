@@ -64,6 +64,15 @@ def test_invoice_missing_materai_above_threshold(evaluator: BusinessRuleEvaluato
     assert any("INV-R004" in r.rule_id for r in result.failed_rules)
 
 
+def test_invoice_requires_materai_at_exact_threshold(evaluator: BusinessRuleEvaluator) -> None:
+    ocr = OCRResult(invoice_number="INV-002", transaction_amount=5_000_000.0)
+    detections = [DetectionResult(page_number=1, model_name="yolo", model_version="1", object_type="stamp", result="OK", required=True, confidence=90.0)]
+
+    result = evaluator.validate_invoice(ocr, detections, 5_000_000.0, 90.0)
+
+    assert any(rule.rule_id == "INV-R004" for rule in result.failed_rules)
+
+
 def test_delivery_note_missing_signatures(evaluator: BusinessRuleEvaluator) -> None:
     result = evaluator.validate_delivery_note([])
     assert result.passed is False

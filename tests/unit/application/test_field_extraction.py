@@ -67,3 +67,19 @@ def test_reads_inline_faktur_penjualan_number() -> None:
     fields = FieldExtractionService().extract_from_ocr({"raw_text": "FAKTUR PENJUALAN NO. 2023/AR-SAD000012678"})
 
     assert fields["document_number"]["value"] == "2023/AR-SAD000012678"
+
+
+def test_preserves_block_evidence_for_each_field() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"tokens_json": [{"text": "Grand Total: Rp 7.500.000", "bbox": [1, 1, 40, 10], "block_id": "p1-b7"}]}
+    )
+
+    assert fields["transaction_amount"]["source_block_id"] == "p1-b7"
+
+
+def test_does_not_pair_adjacent_blocks_without_geometry() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"tokens_json": [{"text": "Vendor"}, {"text": "PT Example Vendor"}]}
+    )
+
+    assert "vendor_name" not in fields

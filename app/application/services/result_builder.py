@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-RESULT_SCHEMA_VERSION = "0.2.0"
+RESULT_SCHEMA_VERSION = "1.1"
 
 
 def build_result_envelope(
@@ -11,13 +11,26 @@ def build_result_envelope(
     status: str = "COMPLETED",
     errors: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """Canonical additive envelope shared by Streamlit and RabbitMQ output."""
+    """Canonical contract-shaped envelope shared by Streamlit and RabbitMQ output."""
+    total = len(documents)
+    ok = sum(1 for document in documents if document.get("document_result", document.get("processing_result")) in {"OK", "SUCCESS"})
+    ng = total - ok
+    overall = "OK" if total and ng == 0 and not errors else "NG"
     return {
         "schema_version": RESULT_SCHEMA_VERSION,
+        "header": {
+            "response_schema_version": RESULT_SCHEMA_VERSION,
+            "overall_result": overall,
+            "processing_status": status,
+            "processing_result": "SUCCESS" if not errors else "PARTIAL_SUCCESS",
+            "ai_note": f"{ok} OK, {ng} NG document(s)",
+        },
         "processing": {"status": status, "duration_ms": duration_ms},
         "documents": documents,
         "summary": {
-            "total_documents": len(documents),
+            "total_documents": total,
+            "ok_documents": ok,
+            "ng_documents": ng,
             "total_pages": sum(len(document.get("pages", [])) for document in documents),
         },
         "errors": errors or [],
@@ -72,8 +85,11 @@ def build_result_payload(
 
     document = {
         "document_id": raw_result.get("document_id", "TEST-DOC-001"),
+        "document_index": raw_result.get("document_index", 0),
         "document_name": file_name,
         "document_type": raw_result.get("doc_type", "UNKNOWN"),
+        "document_category": raw_result.get("document_category", "MAIN_DOCUMENT"),
+        "page_count": len(pages),
         "processing_status": "COMPLETED" if raw_result.get("status") != "error" else "FAILED",
         "processing_result": raw_result.get("status", "FAILED"),
         "processing_time_ms": processing_time_ms or raw_result.get("processing_time_ms", 0),
@@ -93,6 +109,10 @@ def build_result_payload(
         "validation": raw_result.get("validation", {}),
         "confidence": raw_result.get("confidence", {}),
         "reasoning": raw_result.get("reasoning", {"enabled": False}),
+        "business_rule": _business_rule(raw_result.get("validation", {})),
+        "document_summary": raw_result.get("document_summary", {}),
+        "verification": _verification(detections),
+        "duplicate_check": raw_result.get("duplicate_check", {"result": "NOT_APPLICABLE", "confidence": None}),
         "pages": pages,
         "errors": [error for error in (raw_result.get("error"), raw_result.get("detection_error")) if error],
     }
@@ -195,6 +215,7 @@ def _field_entries(fields: dict[str, Any], page_number: int | None) -> list[dict
                 "source_page_number": source_page,
                 "source_text": field.get("source_text"),
                 "source_label": field.get("source_label"),
+                "source_block_id": field.get("source_block_id"),
                 "source_bbox": field.get("source_bbox"),
                 "extraction_method": field.get("extraction_method", field.get("method")),
                 "reason_code": field.get("reason_code"),
@@ -202,3 +223,38 @@ def _field_entries(fields: dict[str, Any], page_number: int | None) -> list[dict
             }
         )
     return entries
+
+
+def _business_rule(validation: Any) -> dict[str, Any]:
+    validation = validation if isinstance(validation, dict) else {}
+    failed = validation.get("failed_rules", []) or []
+    return {
+        "rule_version": "v1.0",
+        "rules_passed": 0,
+        "rules_failed": len(failed),
+        "rules": [
+            {
+                "rule_id": item.get("rule_id"),
+                "rule_name": item.get("rule_name"),
+                "result": "FAILED",
+                "reason": item.get("message", item.get("reason")),
+            }
+            for item in failed
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _verification(detections: list[dict[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for name in ("signature", "stamp", "materai"):
+        matches = [item for item in detections if item.get("object_type") == name]
+        best = max(matches, key=lambda item: item.get("confidence") or 0, default={})
+        result[name] = {
+            "required": True,
+            "result": "OK" if best else "NG",
+            "confidence": _confidence(best.get("confidence")) if best else None,
+            "count": len(matches),
+            "bounding_box": _bbox(best.get("bounding_box"), best.get("normalized_bounding_box"), None, None) if best else None,
+        }
+    return result
