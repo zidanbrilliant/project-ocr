@@ -106,9 +106,15 @@ class FieldReasoningService:
                 continue
             # One value can be discovered by several OCR paths.  Give the model
             # distinct values, not twelve copies of the same noisy candidate.
-            unique_items: dict[str, dict[str, Any]] = {}
+            unique_items: dict[tuple[Any, ...], dict[str, Any]] = {}
             for item in eligible_items:
-                key = str(item.get("value"))
+                key = (
+                    str(item.get("value")),
+                    item.get("currency"),
+                    item.get("amount_role"),
+                    item.get("source_page_number"),
+                    item.get("label_relation"),
+                )
                 if key not in unique_items or float(item.get("score", item["confidence"])) > float(
                     unique_items[key].get("score", unique_items[key]["confidence"])
                 ):
@@ -135,6 +141,7 @@ class FieldReasoningService:
                         "document_position": item.get("source_position"),
                         "label_relation": item.get("label_relation"),
                         "label_distance": item.get("label_distance"),
+                        "extraction_method": item.get("extraction_method"),
                     }
                 )
             candidate_index[name] = indexed
@@ -167,7 +174,6 @@ class FieldReasoningService:
                 name == "transaction_amount"
                 and current.get("amount_role") == "final_total"
                 and current.get("validation", "").startswith("RECONCILED")
-                and item.get("value") != current.get("value")
             ):
                 continue
             chosen = dict(item)

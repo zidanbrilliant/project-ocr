@@ -21,3 +21,4 @@ class OCRResult:
     invoice_confidence: float | None = None
     billing_confidence: float | None = None
     amount_confidence: float | None = None
+    date_confidence: float | None = None

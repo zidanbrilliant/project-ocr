@@ -23,6 +23,19 @@ def test_ocr_confidence_normalizes_extractor_evidence(policy: ConfidencePolicy) 
     assert policy._ocr_confidence(ocr) == 85.0
 
 
+def test_field_validation_uses_evidence_instead_of_presence(policy: ConfidencePolicy) -> None:
+    ocr = OCRResult(
+        invoice_number="INV-1",
+        transaction_amount=100.0,
+        transaction_date="2026-07-20",
+        invoice_confidence=0.9,
+        amount_confidence=0.8,
+        date_confidence=0.7,
+    )
+
+    assert policy._field_validation(ocr) == 80.0
+
+
 def test_detection_confidence_average(policy: ConfidencePolicy) -> None:
     detections = [
         DetectionResult(page_number=1, model_name="yolo", model_version="1", object_type="materai", result="OK", required=True, confidence=95.0),

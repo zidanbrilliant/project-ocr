@@ -394,8 +394,9 @@ class FieldExtractionService:
             if label and value:
                 self._add_labeled(candidates, label, value, bbox, "label_value", doc_type, block_id)
             self._add_document_number(candidates, line, bbox, block_id, doc_type)
+            self._add_raw_document_number_candidates(candidates, line, bbox, block_id, line_index, len(lines))
             self._add_financial_row(candidates, line, bbox, block_id)
-            self._add_date_candidate(candidates, line, bbox, block_id, line_index, len(lines))
+            self._add_date_candidate(candidates, line, bbox, block_id, line_index, lines)
 
         # Nemotron may emit a label and its value in adjacent semantic blocks.
         for index, token in enumerate(tokens[:-1]):
@@ -437,6 +438,34 @@ class FieldExtractionService:
                 )
         return candidates
 
+    def _add_raw_document_number_candidates(
+        self,
+        candidates: dict[str, list[dict[str, Any]]],
+        line: str,
+        bbox: Any,
+        block_id: str,
+        line_index: int,
+        line_count: int,
+    ) -> None:
+        """Offer identifier-shaped OCR spans to Qwen; never select them deterministically."""
+        for raw_value in _NUMBER_RE.findall(self._normalize_document_number(line)):
+            value = self._parse("document_number", raw_value)
+            if value is None or not self._context_document_number_is_safe(str(value)):
+                continue
+            self._add(
+                candidates,
+                "document_number",
+                value,
+                0.2,
+                bbox,
+                "raw_identifier_candidate",
+                line,
+                raw_value=raw_value,
+                source_block_id=block_id,
+                source_position=round((line_index + 1) / max(line_count, 1), 4),
+                candidate_only=True,
+            )
+
     def _add_bidirectional_context_candidates(
         self,
         candidates: dict[str, list[dict[str, Any]]],
@@ -455,35 +484,33 @@ class FieldExtractionService:
                     before_index = index - distance
                     if before_index >= 0:
                         text = "\n".join(line[0] for line in lines[before_index:index])
-                        if self._context_is_related(lines[before_index][1], bbox, name, text, distance):
-                            self._add_context_candidate(
-                                candidates,
-                                name,
-                                text,
-                                alias,
-                                score,
-                                lines[before_index][1],
-                                lines[before_index][2],
-                                "before_label",
-                                distance,
-                                doc_type,
-                            )
+                        self._add_context_candidate(
+                            candidates,
+                            name,
+                            text,
+                            alias,
+                            score,
+                            lines[before_index][1],
+                            lines[before_index][2],
+                            "before_label",
+                            distance,
+                            doc_type,
+                        )
                     after_index = index + distance
                     if after_index < len(lines):
                         text = "\n".join(line[0] for line in lines[index + 1 : after_index + 1])
-                        if self._context_is_related(bbox, lines[index + 1][1], name, text, distance):
-                            self._add_context_candidate(
-                                candidates,
-                                name,
-                                text,
-                                alias,
-                                score,
-                                lines[index + 1][1],
-                                lines[index + 1][2],
-                                "after_label",
-                                distance,
-                                doc_type,
-                            )
+                        self._add_context_candidate(
+                            candidates,
+                            name,
+                            text,
+                            alias,
+                            score,
+                            lines[index + 1][1],
+                            lines[index + 1][2],
+                            "after_label",
+                            distance,
+                            doc_type,
+                        )
 
     def _add_context_candidate(
         self,
@@ -502,7 +529,8 @@ class FieldExtractionService:
         if parsed is None:
             return
         if name == "document_number" and not self._context_document_number_is_safe(str(parsed)):
-            return
+            if not (str(parsed).isdigit() and len(str(parsed)) >= 3 and label_score >= _CONTEXT_LABEL_MIN_SCORE):
+                return
         if not self._allowed(name, label, doc_type):
             return
         money = self._rightmost_money_pair(value_text) if name == "transaction_amount" else None
@@ -532,26 +560,6 @@ class FieldExtractionService:
         return (value.isdigit() and len(value) >= 6) or (
             any(char.isalpha() for char in value) and any(char.isdigit() for char in value)
         )
-
-    @staticmethod
-    def _context_is_related(
-        label_bbox: Any, value_bbox: Any, name: str, value_text: str, distance: int
-    ) -> bool:
-        """Keep split OCR values local; a raw-text fallback must be immediately adjacent."""
-        if distance > 1 and (not _valid_bbox(label_bbox) or not _valid_bbox(value_bbox)):
-            return False
-        if not _valid_bbox(label_bbox) or not _valid_bbox(value_bbox):
-            return True
-        lx1, ly1, lx2, ly2 = (float(item) for item in label_bbox)
-        vx1, vy1, vx2, vy2 = (float(item) for item in value_bbox)
-        horizontal_overlap = max(0.0, min(lx2, vx2) - max(lx1, vx1))
-        narrower_width = max(1.0, min(lx2 - lx1, vx2 - vx1))
-        same_column = horizontal_overlap / narrower_width >= 0.35
-        vertical_gap = max(vy1 - ly2, ly1 - vy2, 0.0)
-        nearby = vertical_gap <= max(30.0, (ly2 - ly1) * (distance + 1.5))
-        if same_column and nearby:
-            return True
-        return False
 
     def _context_labels(self, value: str) -> list[tuple[str, str, float]]:
         normalized = self._normal_label(value)
@@ -682,6 +690,7 @@ class FieldExtractionService:
             source_block_id=block_id,
             amount_role=role,
             currency=currency,
+            candidate_only=label == "total",
         )
 
     def _financial_role(self, line: str) -> tuple[str, str, float] | None:
@@ -702,11 +711,6 @@ class FieldExtractionService:
             )
             if label is not None:
                 return role, label, score
-        if any(
-            phrase in normalized
-            for phrase in ("total harga", "total price", "total qty", "total quantity", "total barang", "total item")
-        ):
-            return None
         for label, score in _LABELS["transaction_amount"]:
             if normalized == label or normalized.startswith(f"{label} "):
                 return "final_total", label, min(score, 0.98)
@@ -719,33 +723,27 @@ class FieldExtractionService:
         bbox: Any,
         block_id: str,
         line_index: int,
-        line_count: int,
+        lines: list[tuple[str, Any, str]],
     ) -> None:
         value = self._date(line)
         if value is None:
             return
-        normalized = self._normal(line)
-        if any(label in normalized for label in ("due date", "jatuh tempo", "payment date", "tanggal bayar")):
-            score, role = 0.25, "due_date"
-        elif any(label in normalized for label in ("print date", "printed", "tanggal cetak")):
-            score, role = 0.2, "print_date"
-        elif any(label in normalized for label in ("tax period", "masa pajak", "periode pajak")):
-            score, role = 0.2, "tax_period"
-        elif any(
-            label in normalized
-            for label in (
-                "invoice date",
-                "tanggal invoice",
-                "tanggal faktur",
-                "tanggal nota",
-                "transaction date",
-                "tanggal transaksi",
-                "issued date",
-            )
-        ):
-            score, role = 0.9, "issue_date"
-        else:
-            score, role = 0.45, "unlabelled"
+        role_data = self._date_role(line)
+        relation = "same_line"
+        if role_data is None:
+            for distance in range(1, 4):
+                for index, candidate_relation in (
+                    (line_index - distance, "after_label"),
+                    (line_index + distance, "before_label"),
+                ):
+                    if 0 <= index < len(lines):
+                        role_data = self._date_role(lines[index][0])
+                        if role_data is not None:
+                            relation = candidate_relation
+                            break
+                if role_data is not None:
+                    break
+        score, role, source_label = role_data or (0.45, "unlabelled", None)
         self._add(
             candidates,
             "transaction_date",
@@ -754,10 +752,42 @@ class FieldExtractionService:
             bbox,
             "date_pattern",
             line,
+            source_label=source_label,
             source_block_id=block_id,
-            source_position=round((line_index + 1) / max(line_count, 1), 4),
+            source_position=round((line_index + 1) / max(len(lines), 1), 4),
             date_role=role,
+            label_relation=relation,
         )
+
+    @classmethod
+    def _date_role(cls, text: str) -> tuple[float, str, str] | None:
+        normalized = cls._normal(text)
+        roles = (
+            (0.25, "due_date", ("due date", "jatuh tempo", "payment date", "tanggal bayar")),
+            (0.2, "print_date", ("print date", "printed", "tanggal cetak")),
+            (0.2, "tax_period", ("tax period", "masa pajak", "periode pajak")),
+            (
+                0.9,
+                "issue_date",
+                (
+                    "invoice date",
+                    "tanggal invoice",
+                    "tanggal faktur",
+                    "tanggal nota",
+                    "transaction date",
+                    "tanggal transaksi",
+                    "issued date",
+                    "date issued",
+                    "receipt date",
+                    "document date",
+                ),
+            ),
+        )
+        for score, role, labels in roles:
+            label = next((item for item in labels if item in normalized), None)
+            if label is not None:
+                return score, role, label
+        return None
 
     def _add_labeled(
         self,
@@ -783,7 +813,11 @@ class FieldExtractionService:
                     if parsed is not None and self._allowed(name, normalized, doc_type):
                         money = self._rightmost_money_pair(value) if name == "transaction_amount" else None
                         extra = (
-                            {"amount_role": "final_total", "currency": self._currency(value) or "IDR"}
+                            {
+                                "amount_role": "final_total",
+                                "currency": self._currency(value) or "IDR",
+                                "candidate_only": alias == "total",
+                            }
                             if name == "transaction_amount"
                             else {}
                         )
@@ -812,11 +846,6 @@ class FieldExtractionService:
         ):
             return False
         if name == "document_number" and any(word in label for word in ("date", "tanggal", "tempo", "tax")):
-            return False
-        if name == "transaction_amount" and any(
-            phrase in label
-            for phrase in ("total harga", "total price", "total qty", "total quantity", "total barang", "total item")
-        ):
             return False
         return not (
             name == "transaction_amount"
@@ -851,12 +880,17 @@ class FieldExtractionService:
         )
 
     def _resolve(self, name: str, items: list[dict[str, Any]]) -> dict[str, Any]:
-        deterministic_items = [item for item in items if not item.get("candidate_only")]
+        if name == "transaction_amount":
+            items = self._validate_amount_candidates(items)
+        deterministic_items = [
+            item
+            for item in items
+            if not item.get("candidate_only") or str(item.get("validation", "")).startswith("RECONCILED")
+        ]
         if not deterministic_items:
             return self._not_found(items)
         items = deterministic_items
         if name == "transaction_amount":
-            items = self._validate_amount_candidates(items)
             eligible = [item for item in items if item.get("amount_role") not in _NON_PAYABLE_ROLES]
             if not eligible:
                 return self._not_found(items)

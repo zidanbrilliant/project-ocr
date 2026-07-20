@@ -131,6 +131,44 @@ def test_reasoning_does_not_replace_reconciled_final_total(monkeypatch) -> None:
     assert audit["used"] is False
 
 
+def test_reasoning_preserves_reconciled_evidence_for_the_same_value(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class SameValueAdapter(_Adapter):
+        async def select(self, request):
+            return {
+                "decisions": [
+                    {
+                        "field_name": "transaction_amount",
+                        "candidate_id": "transaction_amount-0",
+                        "reason_code": "FINAL_PAYABLE_TOTAL",
+                    }
+                ]
+            }
+
+    fields = {
+        "transaction_amount": {
+            "value": 110.0,
+            "status": "FOUND",
+            "confidence": 0.995,
+            "amount_role": "final_total",
+            "validation": "RECONCILED_DPP_PLUS_TAX",
+        }
+    }
+    candidates = {
+        "transaction_amount": [
+            {"value": 110.0, "confidence": 0.75, "score": 0.75, "amount_role": "final_total"},
+            {"value": 100.0, "confidence": 0.2, "score": 0.2, "amount_role": "subtotal"},
+        ]
+    }
+
+    resolved, audit = asyncio.run(FieldReasoningService(SameValueAdapter()).resolve(fields, candidates, "INV"))
+
+    assert resolved["transaction_amount"]["validation"] == "RECONCILED_DPP_PLUS_TAX"
+    assert resolved["transaction_amount"]["confidence"] == 0.995
+    assert audit["used"] is False
+
+
 def test_reasoning_checks_a_single_weak_core_candidate(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
 
@@ -234,3 +272,23 @@ def test_reasoning_deduplicates_values_before_selecting_candidates(monkeypatch) 
     _, audit = asyncio.run(FieldReasoningService(UniqueAdapter()).resolve(fields, candidates, "INV"))
 
     assert audit["engine"] == "qwen3.5-9b"
+
+
+def test_reasoning_keeps_equal_values_in_different_currencies(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class CurrencyAdapter(_Adapter):
+        async def select(self, request):
+            currencies = [item["currency"] for item in request["candidates"]["transaction_amount"]]
+            assert currencies == ["USD", "JPY"]
+            return {"decisions": []}
+
+    fields = {"transaction_amount": {"value": None, "status": "NOT_FOUND", "confidence": 0.0}}
+    candidates = {
+        "transaction_amount": [
+            {"value": 100.0, "currency": "USD", "confidence": 0.2, "score": 0.2},
+            {"value": 100.0, "currency": "JPY", "confidence": 0.2, "score": 0.2},
+        ]
+    }
+
+    asyncio.run(FieldReasoningService(CurrencyAdapter()).resolve(fields, candidates, "INV"))

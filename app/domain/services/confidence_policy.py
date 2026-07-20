@@ -42,6 +42,8 @@ class ConfidencePolicy:
             scores.append(ocr.billing_confidence)
         if ocr.amount_confidence is not None:
             scores.append(ocr.amount_confidence)
+        if ocr.date_confidence is not None:
+            scores.append(ocr.date_confidence)
         if not scores and ocr.average_confidence is not None:
             scores.append(ocr.average_confidence)
         if not scores:
@@ -56,9 +58,11 @@ class ConfidencePolicy:
     def _field_validation(self, ocr: OCRResult) -> float:
         scores = []
         if ocr.invoice_number is not None:
-            scores.append(100.0)
+            scores.append(self._as_percentage(ocr.invoice_confidence) if ocr.invoice_confidence is not None else 50.0)
         if ocr.transaction_amount is not None:
-            scores.append(100.0)
+            scores.append(self._as_percentage(ocr.amount_confidence) if ocr.amount_confidence is not None else 50.0)
+        if ocr.transaction_date is not None:
+            scores.append(self._as_percentage(ocr.date_confidence) if ocr.date_confidence is not None else 50.0)
         if not scores:
             return 0.0
         return sum(scores) / len(scores)

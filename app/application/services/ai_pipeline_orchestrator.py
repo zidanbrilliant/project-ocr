@@ -487,9 +487,11 @@ class AIPipelineOrchestrator:
                     "invoice_number": fields.get("document_number", {}).get("value"),
                     "billing_number": fields.get("billing_number", {}).get("value"),
                     "transaction_amount": fields.get("transaction_amount", {}).get("value"),
+                    "transaction_date": fields.get("transaction_date", {}).get("value"),
                     "invoice_confidence": fields.get("document_number", {}).get("confidence"),
                     "billing_confidence": fields.get("billing_number", {}).get("confidence"),
                     "amount_confidence": fields.get("transaction_amount", {}).get("confidence"),
+                    "date_confidence": fields.get("transaction_date", {}).get("confidence"),
                 }
             )
             result.extracted_fields = [{"field_name": name, **field} for name, field in fields.items()]
@@ -512,6 +514,7 @@ class AIPipelineOrchestrator:
             )
             ocr_entity.vendor_name = fields.get("vendor_name", {}).get("value")
             ocr_entity.transaction_date = fields.get("transaction_date", {}).get("value")
+            ocr_entity.date_confidence = fields.get("transaction_date", {}).get("confidence")
 
             det_entities = [map_to_entity(d) for d in raw_detections]
             aggregated = aggregate_per_object_type(det_entities)

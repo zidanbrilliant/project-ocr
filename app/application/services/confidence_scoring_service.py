@@ -69,9 +69,11 @@ class ConfidenceScoringService:
         r.invoice_number = data.get("invoice_number")
         r.billing_number = data.get("billing_number")
         r.transaction_amount = data.get("transaction_amount")
+        r.transaction_date = data.get("transaction_date")
         r.invoice_confidence = data.get("invoice_confidence")
         r.billing_confidence = data.get("billing_confidence")
         r.amount_confidence = data.get("amount_confidence")
+        r.date_confidence = data.get("date_confidence")
         return r
 
     def _detection_from_dict(self, data: dict[str, Any]) -> DetectionResult:

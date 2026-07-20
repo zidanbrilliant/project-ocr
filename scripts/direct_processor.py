@@ -275,9 +275,11 @@ class DirectProcessor:
                     "invoice_number": fields.get("document_number", {}).get("value"),
                     "billing_number": fields.get("billing_number", {}).get("value"),
                     "transaction_amount": fields.get("transaction_amount", {}).get("value"),
+                    "transaction_date": fields.get("transaction_date", {}).get("value"),
                     "invoice_confidence": fields.get("document_number", {}).get("confidence"),
                     "billing_confidence": fields.get("billing_number", {}).get("confidence"),
                     "amount_confidence": fields.get("transaction_amount", {}).get("confidence"),
+                    "date_confidence": fields.get("transaction_date", {}).get("confidence"),
                 }
             )
 
@@ -304,6 +306,9 @@ class DirectProcessor:
                 "confidence"
             )
             ocr_entity.amount_confidence = ocr_raw.get("amount_confidence") or fields.get("transaction_amount", {}).get(
+                "confidence"
+            )
+            ocr_entity.date_confidence = ocr_raw.get("date_confidence") or fields.get("transaction_date", {}).get(
                 "confidence"
             )
 
