@@ -35,8 +35,7 @@ _NON_PAYABLE_ROLES = {
     "paid",
 }
 _NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period"}
-_MAX_REASONING_PAGES = 4
-_MAX_REASONING_PAGE_CHARS = 12_000
+_MAX_REASONING_CONTEXT_CHARS = 48_000
 
 
 class FieldReasoningService:
@@ -210,18 +209,18 @@ class FieldReasoningService:
                 if 1 <= page_number <= len(pages):
                     priority[page_number] = max(priority.get(page_number, 0.0), float(item.get("score", 0.0)))
 
-        # ponytail: context is capped to relevant pages; use token-aware packing only if real documents exceed it.
-        selected_pages = sorted(priority, key=lambda page_number: (-priority[page_number], page_number))[
-            :_MAX_REASONING_PAGES
-        ]
-        return [
-            {
-                "page_number": page_number,
-                "raw_text": str(pages[page_number - 1].get("raw_text", ""))[:_MAX_REASONING_PAGE_CHARS],
-            }
-            for page_number in sorted(selected_pages)
-            if str(pages[page_number - 1].get("raw_text", "")).strip()
-        ]
+        prioritized = sorted(priority, key=lambda page_number: (-priority[page_number], page_number))
+        ordered_pages = prioritized + [page_number for page_number in range(1, len(pages) + 1) if page_number not in priority]
+        context: dict[int, str] = {}
+        remaining = _MAX_REASONING_CONTEXT_CHARS
+        # ponytail: char ceiling prevents context overflow; add tokenizer packing only if real OCR exceeds this limit.
+        for page_number in ordered_pages:
+            raw_text = str(pages[page_number - 1].get("raw_text", "")).strip()
+            if not raw_text or remaining <= 0:
+                continue
+            context[page_number] = raw_text[:remaining]
+            remaining -= len(context[page_number])
+        return [{"page_number": page_number, "raw_text": context[page_number]} for page_number in sorted(context)]
 
     async def summarize(
         self, document_result: str, fields: dict[str, dict[str, Any]], failed_rules: list[dict[str, Any]]

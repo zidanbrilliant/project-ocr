@@ -249,7 +249,7 @@ def test_recovers_short_numeric_invoice_only_near_a_strong_label() -> None:
     service = FieldExtractionService()
     candidates = service.collect_document_candidates([{"raw_text": "Invoice Number\n12345"}])
 
-    assert any(item["value"] == "12345" and item["candidate_only"] for item in candidates["document_number"])
+    assert any(item["value"] == "12345" and not item["candidate_only"] for item in candidates["document_number"])
     assert "document_number" not in service.collect_document_candidates([{"raw_text": "12345\nSupplier copy"}])
 
 
@@ -268,8 +268,8 @@ def test_harvests_invoice_and_balance_due_values_before_their_labels() -> None:
         for item in candidates["transaction_amount"]
         if item["value"] == 1240.5 and item["extraction_method"] == "context_label_value"
     )
-    assert invoice["candidate_only"] and invoice["label_relation"] == "before_label"
-    assert total["candidate_only"] and total["label_relation"] == "before_label"
+    assert not invoice["candidate_only"] and invoice["label_relation"] == "before_label"
+    assert not total["candidate_only"] and total["label_relation"] == "before_label"
 
 
 def test_rejects_unlabelled_identifier_without_invoice_evidence() -> None:
@@ -288,6 +288,17 @@ def test_collects_each_inline_core_value_once() -> None:
 
     assert [item["value"] for item in candidates["document_number"]] == ["INV-77"]
     assert [item["value"] for item in candidates["transaction_amount"]] == [1_100_000.0]
+
+
+def test_resolves_value_before_a_strong_same_line_label() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "RI - 23014073 Invoice Number\nUSD 1,240.50 Balance Due"}
+    )
+
+    assert fields["document_number"]["value"] == "RI-23014073"
+    assert fields["document_number"]["label_relation"] == "same_line"
+    assert fields["transaction_amount"]["value"] == 1240.5
+    assert fields["transaction_amount"]["label_relation"] == "same_line"
 
 
 def test_generic_total_does_not_create_a_context_label_candidate() -> None:

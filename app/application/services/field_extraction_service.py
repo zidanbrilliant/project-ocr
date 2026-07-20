@@ -399,7 +399,7 @@ class FieldExtractionService:
                     source_position=round((line_index + 1) / max(len(lines), 1), 4),
                     candidate_only=True,
                 )
-        return candidates
+        return {name: self._deduplicate(items) for name, items in candidates.items()}
 
     def _add_bidirectional_context_candidates(
         self,
@@ -412,7 +412,10 @@ class FieldExtractionService:
             for name, alias, score in self._context_labels(label):
                 if name not in _CONTEXT_FIELDS or score < _CONTEXT_LABEL_MIN_SCORE:
                     continue
-                if self._parse(name, label) is not None:
+                self._add_context_candidate(
+                    candidates, name, label, alias, score, bbox, block_id, "same_line", 0, doc_type
+                )
+                if self._parse(name, self._without_label(label, alias)) is not None:
                     continue
                 for distance in range(1, 4):
                     before_index = index - distance
@@ -459,35 +462,66 @@ class FieldExtractionService:
         distance: int,
         doc_type: str | None,
     ) -> None:
-        parsed = self._parse(name, value_text)
+        candidate_text = self._without_label(value_text, label) if relation == "same_line" else value_text
+        parsed = self._parse(name, candidate_text)
         if parsed is None:
+            return
+        if name == "transaction_amount" and (
+            self._rightmost_money_pair(candidate_text) is None
+            or (
+                self._currency(candidate_text) is None
+                and (self._date(candidate_text) is not None or re.fullmatch(r"[\s0-9.,]+", candidate_text) is None)
+            )
+        ):
             return
         if name == "document_number" and not self._context_document_number_is_safe(str(parsed)):
             if not (str(parsed).isdigit() and len(str(parsed)) >= 3 and label_score >= _CONTEXT_LABEL_MIN_SCORE):
                 return
         if not self._allowed(name, label, doc_type):
             return
-        money = self._rightmost_money_pair(value_text) if name == "transaction_amount" else None
+        money = self._rightmost_money_pair(candidate_text) if name == "transaction_amount" else None
         self._add(
             candidates,
             name,
             parsed,
-            min(label_score, 0.8) - distance * 0.02,
+            label_score - distance * 0.02,
             bbox,
             "context_label_value",
             value_text,
             source_label=label,
-            raw_value=money[1] if money else value_text.strip(),
+            raw_value=money[1] if money else candidate_text.strip(),
             source_block_id=block_id,
             label_relation=relation,
             label_distance=distance,
-            candidate_only=True,
+            candidate_only=distance > 1,
             **(
                 {"amount_role": "final_total", "currency": self._currency(value_text) or "UNKNOWN"}
                 if name == "transaction_amount"
                 else {}
             ),
         )
+
+    @staticmethod
+    def _without_label(value: str, label: str) -> str:
+        pattern = re.escape(label).replace(r"\ ", r"\s+")
+        return re.sub(rf"(?i)(?<!\w){pattern}(?!\w)", " ", value, count=1)
+
+    @staticmethod
+    def _deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep the strongest evidence when OCR exposes one value through two paths."""
+        unique: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for item in items:
+            key = (
+                item.get("value"),
+                item.get("currency"),
+                item.get("amount_role"),
+                item.get("date_role"),
+                item.get("source_block_id"),
+            )
+            current = unique.get(key)
+            if current is None or float(item["score"]) > float(current["score"]):
+                unique[key] = item
+        return list(unique.values())
 
     @staticmethod
     def _context_document_number_is_safe(value: str) -> bool:

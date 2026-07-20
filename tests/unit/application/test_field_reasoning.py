@@ -107,6 +107,14 @@ def test_reasoning_sends_relevant_ocr_pages_to_model(monkeypatch) -> None:
     assert audit["context_pages"] == [1, 2, 3]
 
 
+def test_reasoning_context_keeps_all_pages_within_the_budget() -> None:
+    pages = [{"raw_text": f"page {page_number}"} for page_number in range(1, 6)]
+
+    context = FieldReasoningService._document_context(pages, {})
+
+    assert [page["page_number"] for page in context] == [1, 2, 3, 4, 5]
+
+
 def test_reasoning_does_not_replace_reconciled_final_total(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     fields = {
