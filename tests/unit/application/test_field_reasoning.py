@@ -70,3 +70,62 @@ def test_reasoning_never_receives_due_date_candidates(monkeypatch) -> None:
     assert resolved == fields
     assert audit["used"] is False
     assert audit["engine"] == "deterministic"
+
+
+def test_reasoning_sends_relevant_ocr_pages_to_model(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class ContextAdapter(_Adapter):
+        def __init__(self) -> None:
+            self.request = None
+
+        async def select(self, request):
+            self.request = request
+            return {"decisions": []}
+
+    adapter = ContextAdapter()
+    fields = {"document_number": {"value": "INV-1", "status": "FOUND", "confidence": 0.8}}
+    candidates = {
+        "document_number": [
+            {"value": "INV-1", "confidence": 0.8, "score": 0.8, "source_page_number": 2},
+            {"value": "INV-2", "confidence": 0.7, "score": 0.7, "source_page_number": 3},
+        ]
+    }
+    pages = [
+        {"raw_text": "cover page"},
+        {"raw_text": "Invoice No: INV-1"},
+        {"raw_text": "Reference: INV-2"},
+    ]
+
+    _, audit = asyncio.run(FieldReasoningService(adapter).resolve(fields, candidates, "INV", pages))
+
+    assert adapter.request["document_context"] == [
+        {"page_number": 1, "raw_text": "cover page"},
+        {"page_number": 2, "raw_text": "Invoice No: INV-1"},
+        {"page_number": 3, "raw_text": "Reference: INV-2"},
+    ]
+    assert audit["context_pages"] == [1, 2, 3]
+
+
+def test_reasoning_does_not_replace_reconciled_final_total(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    fields = {
+        "transaction_amount": {
+            "value": 110.0,
+            "status": "FOUND",
+            "confidence": 0.99,
+            "amount_role": "final_total",
+            "validation": "RECONCILED_DPP_PLUS_TAX",
+        }
+    }
+    candidates = {
+        "transaction_amount": [
+            {"value": 110.0, "confidence": 0.99, "score": 0.99, "amount_role": "final_total"},
+            {"value": 125.0, "confidence": 0.7, "score": 0.7, "amount_role": "unlabelled_currency"},
+        ]
+    }
+
+    resolved, audit = asyncio.run(FieldReasoningService(_Adapter()).resolve(fields, candidates, "INV"))
+
+    assert resolved["transaction_amount"]["value"] == 110.0
+    assert audit["used"] is False

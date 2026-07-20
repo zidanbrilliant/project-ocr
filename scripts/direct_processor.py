@@ -263,9 +263,11 @@ class DirectProcessor:
 
             candidates = self._field_extractor.collect_document_candidates(page_ocrs, doc_type)
             fields = self._field_extractor.resolve_document_candidates(candidates)
-            fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc_type)
+            fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc_type, page_ocrs)
             result["fields"] = fields
             result["financials"] = self._field_extractor.build_financials(candidates, fields)
+            build_audit = getattr(self._field_extractor, "build_candidate_audit", None)
+            result["field_candidate_audit"] = build_audit(candidates, fields) if callable(build_audit) else {}
             result["reasoning"] = reasoning
 
             ocr_raw.update(

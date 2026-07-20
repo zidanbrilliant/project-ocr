@@ -106,6 +106,7 @@ def build_result_payload(
             "average_confidence": _confidence(raw_result.get("ocr", {}).get("average_confidence")),
         },
         "fields": _field_entries(fields, None),
+        "field_candidate_audit": raw_result.get("field_candidate_audit", {}),
         "financials": raw_result.get("financials", {}),
         "document_color": raw_result.get("document_color", {}),
         "detections": [_detection_entry(d, d.get("page_number", 1) - 1, None, None) for d in detections],

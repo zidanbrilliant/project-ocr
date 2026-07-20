@@ -26,3 +26,17 @@ def test_result_payload_contains_ocr_fields_and_normalized_detection_box() -> No
     assert page["detections"][0]["bounding_box"]["normalized_xyxy"] == [0.1, 0.1, 0.6, 0.6]
     assert payload["schema_version"] == "1.1.0"
     assert payload["header"]["response_schema_version"] == "1.1.0"
+
+
+def test_result_payload_preserves_field_candidate_audit() -> None:
+    raw = {
+        "status": "OK",
+        "pages": [],
+        "field_candidate_audit": {
+            "document_number": [{"value": "RI - 23014073", "selection_status": "SELECTED"}]
+        },
+    }
+
+    payload = build_result_payload(raw, "invoice.png", "image/png", 10, 20)
+
+    assert payload["documents"][0]["field_candidate_audit"]["document_number"][0]["selection_status"] == "SELECTED"

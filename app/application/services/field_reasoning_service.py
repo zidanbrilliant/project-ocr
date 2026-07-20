@@ -35,6 +35,8 @@ _NON_PAYABLE_ROLES = {
     "paid",
 }
 _NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period"}
+_MAX_REASONING_PAGES = 4
+_MAX_REASONING_PAGE_CHARS = 12_000
 
 
 class FieldReasoningService:
@@ -55,7 +57,11 @@ class FieldReasoningService:
         await self._adapter.warmup()
 
     async def resolve(
-        self, fields: dict[str, dict[str, Any]], candidates: dict[str, list[dict[str, Any]]], doc_type: str
+        self,
+        fields: dict[str, dict[str, Any]],
+        candidates: dict[str, list[dict[str, Any]]],
+        doc_type: str,
+        pages: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
         selected = {
             name: items
@@ -87,7 +93,7 @@ class FieldReasoningService:
             indexed: dict[str, dict[str, Any]] = {}
             public_items: list[dict[str, Any]] = []
             for index, item in enumerate(
-                sorted(eligible_items, key=lambda item: item.get("score", item["confidence"]), reverse=True)[:8]
+                sorted(eligible_items, key=lambda item: item.get("score", item["confidence"]), reverse=True)[:12]
             ):
                 candidate_id = f"{name}-{index}"
                 indexed[candidate_id] = item
@@ -112,11 +118,14 @@ class FieldReasoningService:
         if not payload_fields:
             return fields, {"enabled": True, "used": False, "engine": "deterministic"}
 
+        document_context = self._document_context(pages or [], candidates)
+
         reply = await self._adapter.select(
             {
                 "document_type": doc_type,
                 "field_definitions": {name: _FIELD_DEFINITIONS.get(name, name) for name in payload_fields},
                 "candidates": payload_fields,
+                "document_context": document_context,
             }
         )
         resolved = dict(fields)
@@ -127,6 +136,14 @@ class FieldReasoningService:
             name, candidate_id = decision.get("field_name"), decision.get("candidate_id")
             item = candidate_index.get(name, {}).get(candidate_id)
             if item is None:
+                continue
+            current = fields.get(name, {})
+            if (
+                name == "transaction_amount"
+                and current.get("amount_role") == "final_total"
+                and current.get("validation", "").startswith("RECONCILED")
+                and item.get("value") != current.get("value")
+            ):
                 continue
             chosen = dict(item)
             reason_code = str(decision.get("reason_code", ""))
@@ -147,8 +164,33 @@ class FieldReasoningService:
             "used": bool(applied),
             "engine": "qwen3.5-9b",
             "resolved_fields": applied,
+            "context_pages": [page["page_number"] for page in document_context],
             "error": reply.get("error"),
         }
+
+    @staticmethod
+    def _document_context(pages: list[dict[str, Any]], candidates: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        if not pages:
+            return []
+        priority: dict[int, float] = {1: 1.0, len(pages): 0.9}
+        for name in _CORE_SELECTION_FIELDS:
+            for item in candidates.get(name, []):
+                page_number = int(item.get("source_page_number") or 0)
+                if 1 <= page_number <= len(pages):
+                    priority[page_number] = max(priority.get(page_number, 0.0), float(item.get("score", 0.0)))
+
+        # ponytail: context is capped to relevant pages; use token-aware packing only if real documents exceed it.
+        selected_pages = sorted(priority, key=lambda page_number: (-priority[page_number], page_number))[
+            :_MAX_REASONING_PAGES
+        ]
+        return [
+            {
+                "page_number": page_number,
+                "raw_text": str(pages[page_number - 1].get("raw_text", ""))[:_MAX_REASONING_PAGE_CHARS],
+            }
+            for page_number in sorted(selected_pages)
+            if str(pages[page_number - 1].get("raw_text", "")).strip()
+        ]
 
     async def summarize(
         self, document_result: str, fields: dict[str, dict[str, Any]], failed_rules: list[dict[str, Any]]

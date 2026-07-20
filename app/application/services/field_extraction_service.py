@@ -248,6 +248,27 @@ class FieldExtractionService:
     def resolve_document_candidates(self, candidates: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
         return {name: self._resolve(name, items) for name, items in candidates.items()}
 
+    @staticmethod
+    def build_candidate_audit(
+        candidates: dict[str, list[dict[str, Any]]], fields: dict[str, dict[str, Any]]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Expose candidate evidence without pretending to know why a model rejected it."""
+        audit: dict[str, list[dict[str, Any]]] = {}
+        for name, items in candidates.items():
+            selected = fields.get(name, {})
+            audit[name] = []
+            for item in items:
+                entry = dict(item)
+                entry["selection_status"] = (
+                    "SELECTED"
+                    if entry.get("value") == selected.get("value")
+                    and entry.get("source_page_number") == selected.get("source_page_number")
+                    and entry.get("source_block_id") == selected.get("source_block_id")
+                    else "NOT_SELECTED"
+                )
+                audit[name].append(entry)
+        return audit
+
     def build_financials(
         self, candidates: dict[str, list[dict[str, Any]]], fields: dict[str, dict[str, Any]]
     ) -> dict[str, Any]:
@@ -304,16 +325,19 @@ class FieldExtractionService:
         normalized = self._normal(text)
         fields = self.extract_from_ocr(page, doc_type)
 
-        def unresolved(name: str) -> bool:
-            return fields.get(name, {}).get("status") != "FOUND"
+        def needs_stronger_evidence(name: str) -> bool:
+            field = fields.get(name, {})
+            if field.get("status") != "FOUND" or field.get("status") == "AMBIGUOUS":
+                return True
+            return name == "transaction_amount" and field.get("amount_role") != "final_total"
 
         has_document_label = any(label in normalized for label, score in _LABELS["document_number"] if score >= 0.9)
         has_total_label = any(label in normalized for label, _ in _LABELS["transaction_amount"])
         has_date_label = any(label in normalized for label, _ in _LABELS["transaction_date"])
         return (
-            (has_document_label and unresolved("document_number"))
-            or (has_total_label and unresolved("transaction_amount"))
-            or (has_date_label and unresolved("transaction_date"))
+            (has_document_label and needs_stronger_evidence("document_number"))
+            or (has_total_label and needs_stronger_evidence("transaction_amount"))
+            or (has_date_label and needs_stronger_evidence("transaction_date"))
         )
 
     def _candidates(self, page: dict[str, Any], doc_type: str | None) -> dict[str, list[dict[str, Any]]]:
@@ -351,37 +375,34 @@ class FieldExtractionService:
                     str(tokens[index + 1].get("block_id") or f"b{index + 2}"),
                 )
 
-        # When no explicit final-total label exists, currency-marked amounts are
-        # safe candidates. The largest is the deterministic fallback; Qwen still
-        # sees every candidate and may reject tax, subtotal, or unit-price rows.
-        amounts = candidates.get("transaction_amount", [])
-        if not any(item.get("amount_role") == "final_total" for item in amounts):
-            currency_candidates = [
-                (value, raw_value, currency, line, bbox, block_id, line_index)
-                for line_index, (line, bbox, block_id) in enumerate(lines)
-                if self._financial_role(line) is None
-                for value, raw_value, currency in self._currency_amounts(line)
-            ]
-            largest_by_currency = {
-                currency: max(item[0] for item in currency_candidates if item[2] == currency)
-                for currency in {item[2] for item in currency_candidates}
-            }
-            for value, raw_value, currency, line, bbox, block_id, line_index in currency_candidates:
-                is_largest = value == largest_by_currency[currency]
-                self._add(
-                    candidates,
-                    "transaction_amount",
-                    value,
-                    0.62 if is_largest else 0.4,
-                    bbox,
-                    "currency_largest_fallback" if is_largest else "currency_pattern",
-                    line,
-                    raw_value=raw_value,
-                    source_block_id=block_id,
-                    currency=currency,
-                    amount_role="unlabelled_currency",
-                    source_position=round((line_index + 1) / max(len(lines), 1), 4),
-                )
+        # Keep currency-marked alternatives even when a labelled total exists.
+        # They let reasoning reject a weak or OCR-corrupted final-total candidate.
+        currency_candidates = [
+            (value, raw_value, currency, line, bbox, block_id, line_index)
+            for line_index, (line, bbox, block_id) in enumerate(lines)
+            if self._financial_role(line) is None
+            for value, raw_value, currency in self._currency_amounts(line)
+        ]
+        largest_by_currency = {
+            currency: max(item[0] for item in currency_candidates if item[2] == currency)
+            for currency in {item[2] for item in currency_candidates}
+        }
+        for value, raw_value, currency, line, bbox, block_id, line_index in currency_candidates:
+            is_largest = value == largest_by_currency[currency]
+            self._add(
+                candidates,
+                "transaction_amount",
+                value,
+                0.62 if is_largest else 0.4,
+                bbox,
+                "currency_largest_fallback" if is_largest else "currency_pattern",
+                line,
+                raw_value=raw_value,
+                source_block_id=block_id,
+                currency=currency,
+                amount_role="unlabelled_currency",
+                source_position=round((line_index + 1) / max(len(lines), 1), 4),
+            )
         return candidates
 
     @staticmethod

@@ -222,6 +222,7 @@ class AIPipelineOrchestrator:
                 },
                 "ai_note": (dr.document_summary or {}).get("reason", "No document summary available."),
                 "fields": dr.extracted_fields,
+                "field_candidate_audit": dr.field_candidate_audit,
                 "financials": dr.financials or {},
                 "reasoning": dr.reasoning,
                 "document_summary": dr.document_summary,
@@ -479,7 +480,7 @@ class AIPipelineOrchestrator:
             # Extract fields
             candidates = self._field_extractor.collect_document_candidates(ocr_results, doc.document_type)
             fields = self._field_extractor.resolve_document_candidates(candidates)
-            fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc.document_type)
+            fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc.document_type, ocr_results)
             result.financials = self._field_extractor.build_financials(candidates, fields)
             ocr_aggregated.update(
                 {
@@ -492,6 +493,7 @@ class AIPipelineOrchestrator:
                 }
             )
             result.extracted_fields = [{"field_name": name, **field} for name, field in fields.items()]
+            result.field_candidate_audit = self._field_extractor.build_candidate_audit(candidates, fields)
             result.reasoning = reasoning
             for page in result.pages:
                 page.extracted_fields = [
