@@ -9,7 +9,7 @@ from app.domain.value_objects.money_amount import MoneyAmount
 _NUMBER_RE = re.compile(r"(?<![A-Z0-9])(?=[A-Z0-9/.\-]*\d)[A-Z0-9][A-Z0-9/.\-]{2,}", re.IGNORECASE)
 _MONEY_RE = re.compile(r"(?<![A-Z0-9])(?:Rp\.?\s*)?([0-9][0-9.,]*)", re.IGNORECASE)
 _CURRENCY_RE = re.compile(
-    r"(?i)(?:(?P<prefix>Rp\.?|IDR|USD|US\$|SGD|S\$|AUD|A\$|EUR|€|GBP|£|JPY|¥|\$)\s*(?P<prefix_amount>[0-9][0-9.,]*)|(?P<suffix_amount>[0-9][0-9.,]*)\s*(?P<suffix>IDR|USD|SGD|AUD|EUR|GBP|JPY))"
+    r"(?i)(?:(?P<prefix>Rp\.?|IDR\.?|US\$|USD|S\$|SGD|A\$|AUD|C\$|CAD|NZ\$|NZD|HK\$|HKD|CN¥|CNY|RMB|EUR|\u20ac|GBP|\u00a3|JPY|\u00a5|KRW|\u20a9|INR|\u20b9|MYR|RM|THB|\u0e3f|PHP|\u20b1|VND|\u20ab|CHF|AED|SAR|R\$|BRL|ZAR|\$)\s*(?P<prefix_amount>[0-9][0-9.,]*)|(?P<suffix_amount>[0-9][0-9.,]*)\s*(?P<suffix>IDR|USD|SGD|AUD|CAD|NZD|HKD|CNY|RMB|EUR|GBP|JPY|KRW|INR|MYR|THB|PHP|VND|CHF|AED|SAR|BRL|ZAR))"
 )
 _DATE_RE = re.compile(
     r"(?i)\b(?:\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{2,4}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2},?\s+\d{2,4})\b"
@@ -50,15 +50,36 @@ _AMOUNT_ROLES: tuple[tuple[str, tuple[str, ...], float], ...] = (
         "final_total",
         (
             "grand total",
+            "final total",
+            "final invoice total",
+            "final amount",
+            "final payable",
             "invoice total",
+            "total invoice amount",
+            "invoice amount",
             "total bayar",
             "jumlah bayar",
+            "total pembayaran",
             "amount due",
+            "amount payable",
+            "payable amount",
             "balance due",
             "net payable",
+            "net total",
+            "total net",
             "total due",
+            "total after tax",
+            "total including tax",
+            "total incl tax",
+            "total keseluruhan",
+            "jumlah total",
+            "total akhir",
+            "nilai akhir",
             "nilai tagihan",
             "jumlah tagihan",
+            "total tagihan",
+            "total faktur",
+            "total transaksi",
             "total amount",
             "net amount",
             "total",
@@ -115,7 +136,13 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
     "document_number": (
         ("invoice number", 1.0),
         ("invoice no", 1.0),
+        ("invoice id", 0.99),
+        ("invoice code", 0.99),
+        ("invoice reference", 0.98),
+        ("invoice ref", 0.97),
         ("inv no", 1.0),
+        ("inv number", 1.0),
+        ("inv id", 0.98),
         ("nomor invoice", 1.0),
         ("no invoice", 1.0),
         ("nomor faktur", 0.98),
@@ -124,8 +151,11 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
         ("no nota", 0.95),
         ("receipt no", 0.92),
         ("receipt number", 0.92),
+        ("receipt id", 0.9),
         ("bill no", 0.9),
+        ("bill number", 0.9),
         ("document no", 0.9),
+        ("document number", 0.9),
         ("doc no", 0.88),
         ("faktur penjualan", 0.9),
         ("invoice", 0.85),
@@ -141,15 +171,36 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
     ),
     "transaction_amount": (
         ("grand total", 1.0),
+        ("final total", 1.0),
+        ("final invoice total", 1.0),
+        ("final amount", 0.99),
+        ("final payable", 0.99),
         ("invoice total", 0.99),
+        ("total invoice amount", 0.99),
+        ("invoice amount", 0.98),
         ("total bayar", 0.98),
         ("jumlah bayar", 0.98),
+        ("total pembayaran", 0.98),
         ("amount due", 0.98),
+        ("amount payable", 0.98),
+        ("payable amount", 0.98),
         ("balance due", 0.98),
         ("net payable", 0.98),
+        ("net total", 0.98),
+        ("total net", 0.98),
         ("total due", 0.97),
+        ("total after tax", 0.97),
+        ("total including tax", 0.97),
+        ("total incl tax", 0.97),
+        ("total keseluruhan", 0.97),
+        ("jumlah total", 0.97),
+        ("total akhir", 0.97),
+        ("nilai akhir", 0.97),
         ("nilai tagihan", 0.96),
         ("jumlah tagihan", 0.96),
+        ("total tagihan", 0.96),
+        ("total faktur", 0.96),
+        ("total transaksi", 0.96),
         ("total amount", 0.95),
         ("net amount", 0.95),
         ("total", 0.75),
@@ -310,16 +361,19 @@ class FieldExtractionService:
                 if self._financial_role(line) is None
                 for value, raw_value, currency in self._currency_amounts(line)
             ]
-            currencies = {item[2] for item in currency_candidates}
-            largest = max((item[0] for item in currency_candidates), default=None) if len(currencies) == 1 else None
+            largest_by_currency = {
+                currency: max(item[0] for item in currency_candidates if item[2] == currency)
+                for currency in {item[2] for item in currency_candidates}
+            }
             for value, raw_value, currency, line, bbox, block_id, line_index in currency_candidates:
+                is_largest = value == largest_by_currency[currency]
                 self._add(
                     candidates,
                     "transaction_amount",
                     value,
-                    0.58 if value == largest else 0.4,
+                    0.62 if is_largest else 0.4,
                     bbox,
-                    "currency_largest_fallback" if value == largest else "currency_pattern",
+                    "currency_largest_fallback" if is_largest else "currency_pattern",
                     line,
                     raw_value=raw_value,
                     source_block_id=block_id,
@@ -380,7 +434,7 @@ class FieldExtractionService:
             return
         match = (
             re.search(
-                r"(?i)\b(?:invoice|inv|faktur(?:\s+penjualan)?|nota|receipt|bill|document|doc)\b\s*[:#\-]?\s*(?:no\.?|number|nomor|#)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
+                r"(?i)\b(?:invoice|inv|faktur(?:\s+penjualan)?|nota|receipt|bill|document|doc)\b\s*[:#\-]?\s*(?:no\.?|number|nomor|#|id|code|reference|ref)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
                 line,
             )
             or re.search(
@@ -388,7 +442,7 @@ class FieldExtractionService:
                 line,
             )
             or re.search(
-                r"(?i)\b(?:no\.?|number|nomor)\s*(?:invoice|inv|faktur|nota|receipt|bill)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
+                r"(?i)\b(?:no\.?|number|nomor|id|code|reference|ref)\s*(?:invoice|inv|faktur|nota|receipt|bill)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
                 line,
             )
             or re.search(r"(?i)\b((?:INV|FAK)[\s/\-]*[0-9][A-Z0-9/.\-]*)", line)
@@ -731,13 +785,26 @@ class FieldExtractionService:
         normalized = value.upper().replace(".", "")
         return {
             "RP": "IDR",
+            "IDR": "IDR",
+            "C$": "CAD",
+            "NZ$": "NZD",
+            "HK$": "HKD",
+            "CN¥": "CNY",
+            "RMB": "CNY",
+            "€": "EUR",
+            "£": "GBP",
+            "¥": "JPY",
+            "₩": "KRW",
+            "₹": "INR",
+            "RM": "MYR",
+            "฿": "THB",
+            "₱": "PHP",
+            "₫": "VND",
+            "R$": "BRL",
             "US$": "USD",
             "$": "USD",
             "S$": "SGD",
             "A$": "AUD",
-            "€": "EUR",
-            "£": "GBP",
-            "¥": "JPY",
         }.get(normalized, normalized)
 
     @staticmethod

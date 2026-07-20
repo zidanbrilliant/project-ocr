@@ -140,6 +140,41 @@ def test_supports_usd_total_fallback() -> None:
     assert fields["transaction_amount"]["currency"] == "USD"
 
 
+def test_extracts_invoice_reference_and_final_total() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Invoice Reference: INV-REF/2026-77\nFinal Total: USD 1,240.50"}
+    )
+
+    assert fields["document_number"]["value"] == "INV-REF/2026-77"
+    assert fields["transaction_amount"]["value"] == 1240.5
+    assert fields["transaction_amount"]["currency"] == "USD"
+    assert fields["transaction_amount"]["amount_role"] == "final_total"
+
+
+def test_uses_largest_jpy_currency_amount_when_total_label_is_missing() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Item JPY 12,500\nTax JPY 1,250\nJPY 24,000\nJPY 18,000"}
+    )
+
+    assert fields["transaction_amount"]["value"] == 24_000.0
+    assert fields["transaction_amount"]["currency"] == "JPY"
+    assert fields["transaction_amount"]["extraction_method"] == "currency_largest_fallback"
+
+
+def test_supports_jpy_currency_symbol_for_explicit_final_total() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Final Total: ¥ 24,000"})
+
+    assert fields["transaction_amount"]["value"] == 24_000.0
+    assert fields["transaction_amount"]["currency"] == "JPY"
+
+
+def test_does_not_compare_largest_fallback_across_currencies() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "USD 120.00\nJPY 24,000"})
+
+    assert fields["transaction_amount"]["status"] == "AMBIGUOUS"
+    assert fields["transaction_amount"]["candidate_count"] == 2
+
+
 def test_extracts_issue_date_inside_text_and_rejects_due_date() -> None:
     fields = FieldExtractionService().extract_from_ocr(
         {"raw_text": "Invoice Date: Jakarta, 20 Juli 2026 14:30\nDue Date: 20/08/2026"}
