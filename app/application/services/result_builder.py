@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-RESULT_SCHEMA_VERSION = "1.1"
+RESULT_SCHEMA_VERSION = "1.1.0"
 
 
 def build_result_envelope(
@@ -48,6 +48,7 @@ def build_result_payload(
     page_images = raw_result.get("pages", [])
     page_ocrs = raw_result.get("_page_ocrs", [])
     page_barcodes = raw_result.get("_page_bcs", [])
+    quality_pages = raw_result.get("quality_pages", [])
     fields = raw_result.get("fields", {})
     detections = raw_result.get("detections", [])
     pages = []
@@ -78,7 +79,7 @@ def build_result_payload(
                 ],
                 "barcodes": [page_barcodes[index]] if index < len(page_barcodes) else [],
                 "extracted_fields": page_fields,
-                "document_quality": raw_result.get("quality_scores", {}) if index == 0 else {},
+                "document_quality": quality_pages[index] if index < len(quality_pages) else raw_result.get("quality_scores", {}),
                 "errors": [{"stage": "OCR", "message": ocr["error"]}] if ocr.get("error") else [],
             }
         )
@@ -90,7 +91,7 @@ def build_result_payload(
         "document_type": raw_result.get("doc_type", "UNKNOWN"),
         "document_category": raw_result.get("document_category", "MAIN_DOCUMENT"),
         "page_count": len(pages),
-        "processing_status": "COMPLETED" if raw_result.get("status") != "error" else "FAILED",
+        "processing_status": "FAILED" if raw_result.get("error") else "COMPLETED",
         "processing_result": raw_result.get("status", "FAILED"),
         "processing_time_ms": processing_time_ms or raw_result.get("processing_time_ms", 0),
         "file_information": {
@@ -105,6 +106,8 @@ def build_result_payload(
             "average_confidence": _confidence(raw_result.get("ocr", {}).get("average_confidence")),
         },
         "fields": _field_entries(fields, None),
+        "financials": raw_result.get("financials", {}),
+        "document_color": raw_result.get("document_color", {}),
         "detections": [_detection_entry(d, d.get("page_number", 1) - 1, None, None) for d in detections],
         "validation": raw_result.get("validation", {}),
         "confidence": raw_result.get("confidence", {}),
@@ -220,6 +223,11 @@ def _field_entries(fields: dict[str, Any], page_number: int | None) -> list[dict
                 "extraction_method": field.get("extraction_method", field.get("method")),
                 "reason_code": field.get("reason_code"),
                 "reasoning_engine": field.get("reasoning_engine"),
+                "amount_role": field.get("amount_role"),
+                "currency": field.get("currency"),
+                "validation": field.get("validation"),
+                "candidate_count": field.get("candidate_count"),
+                "alternatives": field.get("alternatives", []),
             }
         )
     return entries
@@ -256,5 +264,13 @@ def _verification(detections: list[dict[str, Any]]) -> dict[str, Any]:
             "confidence": _confidence(best.get("confidence")) if best else None,
             "count": len(matches),
             "bounding_box": _bbox(best.get("bounding_box"), best.get("normalized_bounding_box"), None, None) if best else None,
+            "matches": [
+                {
+                    "page_number": item.get("page_number"),
+                    "confidence": _confidence(item.get("confidence")),
+                    "bounding_box": _bbox(item.get("bounding_box"), item.get("normalized_bounding_box"), item.get("page_width"), item.get("page_height")),
+                }
+                for item in matches
+            ],
         }
     return result

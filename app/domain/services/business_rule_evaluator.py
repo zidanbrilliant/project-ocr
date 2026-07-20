@@ -20,6 +20,7 @@ class RuleConfig:
     require_signature: bool = False
     require_stamp: bool = True
     require_barcode: bool = False
+    require_colored_document: bool = True
     required_signature_count: int = 2
     required_stamp_count: int = 2
     require_colored_stamp: bool = True
@@ -34,6 +35,7 @@ class BusinessRuleEvaluator:
             require_signature=settings.REQUIRE_SIGNATURE_FOR_INVOICE,
             require_stamp=settings.REQUIRE_STAMP_FOR_INVOICE,
             require_barcode=settings.REQUIRE_BARCODE_FOR_INVOICE,
+            require_colored_document=settings.REQUIRE_COLORED_DOCUMENT,
             amount_stamp_duty_threshold=settings.AMOUNT_STAMP_DUTY_THRESHOLD,
             require_materai_above_threshold=settings.REQUIRE_MATERAI_ABOVE_THRESHOLD,
             required_signature_count=settings.DELIVERY_NOTE_REQUIRED_SIGNATURE_COUNT,
@@ -49,6 +51,8 @@ class BusinessRuleEvaluator:
         amount: float | None,
         confidence: float | None,
         business_context: dict[str, Any] | None = None,
+        barcode_result: dict[str, Any] | None = None,
+        is_colored: bool | None = None,
     ) -> BusinessValidationResult:
         failed: list[FailedRule] = []
 
@@ -76,12 +80,12 @@ class BusinessRuleEvaluator:
         if self._config.require_signature and not signature_detected:
             failed.append(FailedRule("INV-R006", "Signature required", "Missing signature."))
 
-        barcode_detected = any(d.result == "OK" and d.object_type == "barcode" for d in detections)
-        if self._config.require_barcode and not barcode_detected:
-            failed.append(FailedRule("INV-R007", "Barcode required", "Barcode not found."))
+        barcode_decoded = bool((barcode_result or {}).get("barcode_decoded") and (barcode_result or {}).get("barcode_value"))
+        if self._config.require_barcode and not barcode_decoded:
+            failed.append(FailedRule("INV-R007", "Decoded barcode required", "Barcode was not decoded."))
 
-        if confidence is not None and confidence < self._config.confidence_threshold:
-            failed.append(FailedRule("INV-R008", "Confidence below threshold", "AI confidence below threshold. Manual verification required."))
+        if self._config.require_colored_document and is_colored is False:
+            failed.append(FailedRule("DOC-R001", "Colored document required", "Document is monochrome."))
 
         context = business_context or {}
         expected_amount = _as_number(context.get("total_amount"))
@@ -111,6 +115,7 @@ class BusinessRuleEvaluator:
     def validate_delivery_note(
         self,
         detections: list[DetectionResult],
+        is_colored: bool | None = None,
     ) -> BusinessValidationResult:
         failed: list[FailedRule] = []
 
@@ -122,6 +127,9 @@ class BusinessRuleEvaluator:
 
         if stamp_count < self._config.required_stamp_count:
             failed.append(FailedRule("DN-R002", "Delivery Note stamp count", f"Required company stamp count is not met ({stamp_count}/{self._config.required_stamp_count})."))
+
+        if self._config.require_colored_document and is_colored is False:
+            failed.append(FailedRule("DOC-R001", "Colored document required", "Document is monochrome."))
 
         passed = len(failed) == 0
         return BusinessValidationResult(

@@ -5,7 +5,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreoffice-writer \
     libgl1 \
     libglib2.0-0 \
     tzdata \

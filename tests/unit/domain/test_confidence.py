@@ -18,6 +18,11 @@ def test_ocr_confidence_average(policy: ConfidencePolicy) -> None:
     assert score == 85.0
 
 
+def test_ocr_confidence_normalizes_extractor_evidence(policy: ConfidencePolicy) -> None:
+    ocr = OCRResult(invoice_confidence=0.9, amount_confidence=0.8)
+    assert policy._ocr_confidence(ocr) == 85.0
+
+
 def test_detection_confidence_average(policy: ConfidencePolicy) -> None:
     detections = [
         DetectionResult(page_number=1, model_name="yolo", model_version="1", object_type="materai", result="OK", required=True, confidence=95.0),

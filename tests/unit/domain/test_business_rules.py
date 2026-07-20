@@ -50,6 +50,12 @@ def test_invoice_missing_stamp(evaluator: BusinessRuleEvaluator) -> None:
     assert any("stamp" in r.rule_id.lower() for r in result.failed_rules)
 
 
+def test_invoice_requires_decoded_barcode_and_colored_document() -> None:
+    evaluator = BusinessRuleEvaluator(RuleConfig(require_invoice_number=False, require_amount=False, require_stamp=False, require_barcode=True))
+    result = evaluator.validate_invoice(OCRResult(), [], None, None, barcode_result={"barcode_found": True, "barcode_decoded": False}, is_colored=False)
+    assert {rule.rule_id for rule in result.failed_rules} == {"INV-R007", "DOC-R001"}
+
+
 def test_invoice_missing_materai_above_threshold(evaluator: BusinessRuleEvaluator) -> None:
     ocr = OCRResult()
     ocr.invoice_number = "INV-002"

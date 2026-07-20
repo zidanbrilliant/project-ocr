@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 
 from app.shared.logging.logger import get_logger
+from app.shared.config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -38,6 +39,10 @@ class ImagePreprocessor:
         resolution_score = min(100, (w * h) / (1920 * 1080) * 100)
 
         page_readability = (blur_score * 0.5 + brightness_score * 0.3 + resolution_score * 0.2)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        visible = hsv[:, :, 2] > 40
+        colored = visible & (hsv[:, :, 1] >= 25)
+        colored_pixel_ratio = float(colored.sum() / max(int(visible.sum()), 1))
 
         return {
             "resolution_score": round(min(100, resolution_score), 2),
@@ -46,6 +51,8 @@ class ImagePreprocessor:
             "page_readability_score": round(min(100, page_readability), 2),
             "width": w,
             "height": h,
+            "colored_pixel_ratio": round(colored_pixel_ratio, 4),
+            "is_colored": colored_pixel_ratio >= settings.MIN_COLORED_PIXEL_RATIO,
         }
 
     def _load_image(self, image_bytes: bytes) -> np.ndarray:

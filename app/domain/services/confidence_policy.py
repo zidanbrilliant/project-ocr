@@ -46,7 +46,12 @@ class ConfidencePolicy:
             scores.append(ocr.average_confidence)
         if not scores:
             return 0.0
-        return sum(scores) / len(scores)
+        return sum(self._as_percentage(score) for score in scores) / len(scores)
+
+    @staticmethod
+    def _as_percentage(value: float) -> float:
+        """Accept legacy extractor evidence (0-1) and model scores (0-100)."""
+        return value * 100.0 if 0.0 <= value <= 1.0 else value
 
     def _field_validation(self, ocr: OCRResult) -> float:
         scores = []

@@ -69,7 +69,7 @@ class DirectProcessor:
         result: dict[str, Any] = {
             "filename": filename,
             "doc_type": doc_type,
-            "status": "error",
+            "status": statuses.NG,
             "error": None,
             "processing_time_ms": 0,
             "document_info": {},
@@ -199,6 +199,7 @@ class DirectProcessor:
             for pp_img in preprocessed or page_images:
                 quality_scores.append(self._preprocessor.compute_quality(pp_img))
             quality = quality_scores[0] if quality_scores else {}
+            document_colored = bool(quality_scores) and all(item.get("is_colored", False) for item in quality_scores)
 
             all_detections: list[dict[str, Any]] = []
             if page_images:
@@ -228,6 +229,20 @@ class DirectProcessor:
             }
             if yolo_error and not all_detections:
                 result["error"] = result.get("error") or yolo_error
+            for index, barcode in enumerate(page_bcs):
+                if barcode.get("barcode_decoded"):
+                    continue
+                retry = await self._barcode_chain.read(
+                    page_images[index],
+                    [
+                        detection
+                        for detection in all_detections
+                        if detection.get("page_number") == index + 1 and detection.get("object_type") == "barcode"
+                    ],
+                )
+                if retry.get("barcode_decoded"):
+                    page_bcs[index] = retry
+                    bc_raw = retry
             barcode_raw = bc_raw
             result["barcode"] = barcode_raw
 
@@ -235,7 +250,19 @@ class DirectProcessor:
             fields = self._field_extractor.resolve_document_candidates(candidates)
             fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc_type)
             result["fields"] = fields
+            result["financials"] = self._field_extractor.build_financials(candidates, fields)
             result["reasoning"] = reasoning
+
+            ocr_raw.update(
+                {
+                    "invoice_number": fields.get("document_number", {}).get("value"),
+                    "billing_number": fields.get("billing_number", {}).get("value"),
+                    "transaction_amount": fields.get("transaction_amount", {}).get("value"),
+                    "invoice_confidence": fields.get("document_number", {}).get("confidence"),
+                    "billing_confidence": fields.get("billing_number", {}).get("confidence"),
+                    "amount_confidence": fields.get("transaction_amount", {}).get("confidence"),
+                }
+            )
 
             amount = None
             if fields.get("transaction_amount"):
@@ -264,7 +291,9 @@ class DirectProcessor:
             )
 
             if doc_type in {"DN", "DELIVERY_NOTE"}:
-                validation = self._rule_evaluator.validate_delivery_note(detections=det_entities)
+                validation = self._rule_evaluator.validate_delivery_note(
+                    detections=det_entities, is_colored=document_colored
+                )
             else:
                 validation = self._rule_evaluator.validate_invoice(
                     ocr=ocr_entity,
@@ -272,6 +301,8 @@ class DirectProcessor:
                     amount=amount,
                     confidence=ocr_raw.get("average_confidence"),
                     business_context=None,
+                    barcode_result=barcode_raw,
+                    is_colored=document_colored,
                 )
 
             total_conf = self._conf_scorer.calculate(
@@ -340,6 +371,8 @@ class DirectProcessor:
                 result["status"] = statuses.NG
                 result["error"] = ocr_errors[0]
             result["quality_scores"] = quality
+            result["quality_pages"] = quality_scores
+            result["document_color"] = {"is_colored": document_colored, "pages": quality_scores}
 
             elapsed_ms = int((time.monotonic() - start) * 1000)
             result["processing_time_ms"] = elapsed_ms
@@ -357,7 +390,7 @@ class DirectProcessor:
             result["processing_time_ms"] = elapsed_ms
         except Exception as e:
             logger.exception("direct_process_failed")
-            result["status"] = "error"
+            result["status"] = statuses.NG
             result["error"] = str(e)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             result["processing_time_ms"] = elapsed_ms
@@ -390,7 +423,7 @@ class DirectProcessor:
         page_bcs = result.get("_page_bcs", [])
         all_dets = result.get("detections", [])
         total_conf = result.get("confidence", {}).get("total")
-        overall = result.get("status", "error")
+        overall = result.get("status", statuses.NG)
         remark = result.get("remarks", "")
         doc_info = result.get("document_info", {})
         ext = doc_info.get("extension", "")
@@ -510,15 +543,3 @@ class DirectProcessor:
 
     async def close(self) -> None:
         return None
-
-
-def _merge_ocr_text(native_text: str, visual_text: str) -> str:
-    native = native_text.strip()
-    visual = visual_text.strip()
-    if not native:
-        return visual
-    if not visual or visual in native:
-        return native
-    if native in visual:
-        return visual
-    return f"{native}\n\n{visual}"

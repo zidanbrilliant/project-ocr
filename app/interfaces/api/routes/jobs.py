@@ -55,6 +55,7 @@ async def get_job_result(
         ai_return_confidence=result.ai_return_confidence,
         ai_return_remark=result.ai_return_remark,
         result=result.result,
+        pages=result.pages,
     )
 
 

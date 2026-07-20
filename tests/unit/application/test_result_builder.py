@@ -24,5 +24,5 @@ def test_result_payload_contains_ocr_fields_and_normalized_detection_box() -> No
     assert page["extracted_fields"][0]["source_bbox"] == [1, 2, 3, 4]
     assert page["extracted_fields"][0]["source_block_id"] == "p1-b1"
     assert page["detections"][0]["bounding_box"]["normalized_xyxy"] == [0.1, 0.1, 0.6, 0.6]
-    assert payload["schema_version"] == "1.1"
-    assert payload["header"]["response_schema_version"] == "1.1"
+    assert payload["schema_version"] == "1.1.0"
+    assert payload["header"]["response_schema_version"] == "1.1.0"

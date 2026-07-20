@@ -17,9 +17,9 @@ _MONTHS = {
 
 # Order matters: the first matching amount label is the intended business role.
 _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
-    "document_number": (("invoice number", 1.0), ("invoice no", 1.0), ("nomor invoice", 1.0), ("no invoice", 1.0), ("nomor faktur", 0.98), ("no faktur", 0.95), ("faktur penjualan", 0.9), ("invoice", 0.8)),
+    "document_number": (("invoice number", 1.0), ("invoice no", 1.0), ("nomor invoice", 1.0), ("no invoice", 1.0), ("nomor faktur", 0.98), ("no faktur", 0.95), ("faktur penjualan", 0.9)),
     "billing_number": (("billing number", 1.0), ("billing no", 1.0), ("nomor billing", 1.0), ("no tagihan", 0.95), ("kode billing", 0.9), ("payment reference", 0.85)),
-    "transaction_amount": (("grand total", 1.0), ("total bayar", 0.98), ("amount due", 0.98), ("nilai tagihan", 0.96), ("total amount", 0.95), ("total", 0.75), ("subtotal", 0.35), ("sub total", 0.35), ("dpp", 0.2), ("ppn", 0.15)),
+    "transaction_amount": (("grand total", 1.0), ("total bayar", 0.98), ("amount due", 0.98), ("nilai tagihan", 0.96), ("total amount", 0.95), ("total", 0.75)),
     "transaction_date": (("invoice date", 1.0), ("tanggal invoice", 1.0), ("tanggal faktur", 0.95), ("document date", 0.9), ("date", 0.75), ("tanggal", 0.75), ("tgl", 0.7)),
     "vendor_name": (("vendor", 1.0), ("supplier", 1.0), ("pemasok", 1.0), ("penjual", 0.95), ("seller", 0.95)),
 }
@@ -45,6 +45,39 @@ class FieldExtractionService:
 
     def resolve_document_candidates(self, candidates: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
         return {name: self._resolve(name, items) for name, items in candidates.items()}
+
+    def build_financials(
+        self, candidates: dict[str, list[dict[str, Any]]], fields: dict[str, dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Keep the payable total separate from tax components and their evidence."""
+        amounts = candidates.get("transaction_amount", [])
+
+        def best(role: str) -> dict[str, Any] | None:
+            matches = [item for item in amounts if item.get("amount_role") == role]
+            return dict(max(matches, key=lambda item: float(item["score"]))) if matches else None
+
+        final_total = fields.get("transaction_amount")
+        if final_total and final_total.get("amount_role") != "final_total":
+            final_total = best("final_total") or final_total
+        tax_base = best("tax_base")
+        taxes = [dict(item) for item in amounts if item.get("amount_role") == "tax"]
+        discounts = [dict(item) for item in amounts if item.get("amount_role") == "discount"]
+        subtotal = best("subtotal")
+        expected = None
+        if tax_base and taxes:
+            expected = float(tax_base["value"]) + sum(float(item["value"]) for item in taxes)
+        reconciliation = "NOT_APPLICABLE"
+        if final_total and expected is not None:
+            reconciliation = "RECONCILED_DPP_PLUS_TAX" if abs(float(final_total["value"]) - expected) < 0.01 else "UNRECONCILED"
+        return {
+            "currency": "IDR",
+            "final_total": final_total,
+            "subtotal": subtotal,
+            "discounts": discounts,
+            "taxable_base": tax_base,
+            "taxes": taxes,
+            "reconciliation": reconciliation,
+        }
 
     def extract_from_ocr(self, ocr_result: dict[str, Any], doc_type: str | None = None) -> dict[str, Any]:
         return {name: self._resolve(name, items) for name, items in self._candidates(ocr_result, doc_type).items()}
@@ -138,13 +171,16 @@ class FieldExtractionService:
                 if normalized == alias or normalized.startswith(f"{alias} "):
                     parsed = self._parse(name, value)
                     if parsed is not None and self._allowed(name, normalized, doc_type):
-                        self._add(candidates, name, parsed, score, bbox, method, f"{label}: {value}", label, value, source_block_id=block_id)
+                        extra = {"amount_role": "final_total", "currency": "IDR"} if name == "transaction_amount" else {}
+                        self._add(candidates, name, parsed, score, bbox, method, f"{label}: {value}", label, value, source_block_id=block_id, **extra)
                     return
 
     @staticmethod
     def _allowed(name: str, label: str, doc_type: str | None) -> bool:
         # Tax invoice numbers are not the invoice number of an ordinary invoice.
-        return not (name == "document_number" and "pajak" in label and (doc_type or "").upper() not in {"TAX_INVOICE", "FAKTUR_PAJAK"})
+        if name == "document_number" and "pajak" in label and (doc_type or "").upper() not in {"TAX_INVOICE", "FAKTUR_PAJAK"}:
+            return False
+        return not (name == "transaction_amount" and any(word in label for word in ("subtotal", "sub total", "dpp", "ppn", "pajak")))
 
     def _add(
         self, candidates: dict[str, list[dict[str, Any]]], name: str, value: Any, score: float, bbox: Any,
@@ -182,10 +218,10 @@ class FieldExtractionService:
             item["confidence"] = item["score"]
             item["validation"] = "LABELLED_FINAL_TOTAL"
             if tax_bases and taxes:
-                expected = float(tax_bases[-1]["value"]) + float(taxes[-1]["value"]) - float(discounts[-1]["value"]) if discounts else float(tax_bases[-1]["value"]) + float(taxes[-1]["value"])
+                expected = float(tax_bases[-1]["value"]) + float(taxes[-1]["value"])
                 if abs(float(item["value"]) - expected) < 0.01:
                     item["score"] = item["confidence"] = 0.995
-                    item["validation"] = "RECONCILED_DPP_PLUS_TAX_MINUS_DISCOUNT"
+                    item["validation"] = "RECONCILED_DPP_PLUS_TAX"
         return checked
 
     @staticmethod

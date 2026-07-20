@@ -9,7 +9,7 @@ class ConfidenceScore:
         if not (0 <= self.value <= 100):
             raise ValueError(f"Confidence must be 0-100, got {self.value}")
 
-    def is_above_threshold(self, threshold: int = 80) -> bool:
+    def is_above_threshold(self, threshold: int = 85) -> bool:
         return self.value >= threshold
 
     def to_int(self) -> int:
@@ -21,7 +21,7 @@ class ConfidenceScore:
             return None
         if value >= 95:
             return "Very High"
-        if value >= 80:
+        if value >= 85:
             return "High"
         if value >= 60:
             return "Medium"

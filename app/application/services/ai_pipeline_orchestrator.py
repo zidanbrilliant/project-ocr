@@ -6,7 +6,6 @@ from typing import Any
 
 from aio_pika.abc import AbstractIncomingMessage
 
-from app.application.dto.request_normalizer import normalize_request
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
 from app.application.services.field_reasoning_service import FieldReasoningService
@@ -20,6 +19,7 @@ from app.domain.entities.normalized_request import (
     PageProcessingResult,
 )
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
+from app.domain.value_objects.confidence_score import ConfidenceScore
 from app.infrastructure.barcode.barcode_fallback_chain import BarcodeFallbackChain
 from app.infrastructure.database.repositories.ai_job_postgres_repository import AIJobPostgresRepository
 from app.infrastructure.database.repositories.audit_log_postgres_repository import AuditLogPostgresRepository
@@ -29,7 +29,6 @@ from app.infrastructure.detection.yolo_adapter import YOLOAdapter
 from app.infrastructure.document_converter.document_validator import DocumentValidator
 from app.infrastructure.document_converter.image_preprocessor import ImagePreprocessor
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
-from app.infrastructure.document_converter.word_converter import WordConverter
 from app.infrastructure.ocr.document_ocr import DocumentOCR
 from app.infrastructure.rabbitmq.publisher import ResultPublisher
 from app.infrastructure.rabbitmq.retry import RetryHandler
@@ -57,6 +56,11 @@ def _ocr_error(ocr_result: dict[str, Any]) -> str | None:
     return None
 
 
+def _average_confidence(ocr_results: list[dict[str, Any]]) -> float | None:
+    scores = [float(item["average_confidence"]) for item in ocr_results if item.get("average_confidence") is not None]
+    return sum(scores) / len(scores) if scores else None
+
+
 class AIPipelineOrchestrator:
     def __init__(
         self,
@@ -67,7 +71,6 @@ class AIPipelineOrchestrator:
         retry_handler: RetryHandler,
         file_client: ImageServerClient,
         pdf_renderer: PDFRenderer,
-        word_converter: WordConverter,
         preprocessor: ImagePreprocessor,
         ocr_engine: DocumentOCR,
         yolo: YOLOAdapter,
@@ -85,7 +88,6 @@ class AIPipelineOrchestrator:
         self._retry = retry_handler
         self._file_client = file_client
         self._pdf_renderer = pdf_renderer
-        self._word_converter = word_converter
         self._preprocessor = preprocessor
         self._ocr_engine = ocr_engine
         self._yolo = yolo
@@ -99,8 +101,7 @@ class AIPipelineOrchestrator:
         # multiply GPU work by the number of concurrent documents.
         self._page_sem = asyncio.Semaphore(max(1, settings.MAX_INFLIGHT_PAGES))
 
-    async def process(self, payload: dict[str, Any], msg: AbstractIncomingMessage) -> bool:
-        normalized = normalize_request(payload)
+    async def process(self, normalized: NormalizedJobRequest, msg: AbstractIncomingMessage) -> bool:
         existing = await self._job_repo.get_by_queue_id(normalized.queue_id)
         job_id = existing.job_id if existing else uuid.uuid4()
         async with log_context(
@@ -144,6 +145,7 @@ class AIPipelineOrchestrator:
                 )
             )
         await self._audit.log(job_id, req.queue_id, "worker", "job_accepted", after={"doc_count": len(req.documents)})
+        await self._job_repo.commit()
 
         # ponytail: process documents in parallel with bounded concurrency
         doc_sem = asyncio.Semaphore(settings.MAX_PARALLEL_DOCUMENTS)
@@ -180,6 +182,8 @@ class AIPipelineOrchestrator:
             1 for d in doc_results if d.processing_result in (statuses.INTERNAL_ERROR, statuses.DOCUMENT_ERROR)
         )
         overall = statuses.OK if ok_count == len(doc_results) and error_count == 0 else statuses.NG
+        document_confidences = [item.confidence for item in doc_results if item.confidence is not None]
+        folder_confidence = min(document_confidences) if document_confidences else None
 
         finish_dt = datetime.utcnow()
         duration_ms = int((finish_dt - start_dt).total_seconds() * 1000)
@@ -197,7 +201,7 @@ class AIPipelineOrchestrator:
             "QUEUE_ID": req.queue_id,
             "AI_RETURN_STATUS": overall,
             "AI_RETURN_CD": return_codes.SUCCESS if error_count == 0 else return_codes.PARTIAL_SUCCESS,
-            "AI_RETURN_CONFIDENCE": None,
+            "AI_RETURN_CONFIDENCE": folder_confidence,
             "AI_SCAN_APP": req.source_system,
             "documents": [],
         }
@@ -209,11 +213,21 @@ class AIPipelineOrchestrator:
                 "processing_status": dr.processing_status,
                 "processing_result": dr.processing_result,
                 "document_result": dr.document_result,
-                "confidence": dr.confidence,
+                "confidence": {
+                    "total": dr.confidence,
+                    "level": ConfidenceScore.level(dr.confidence),
+                    "threshold": settings.CONFIDENCE_THRESHOLD,
+                    "overall_result": dr.document_result,
+                    "scale": "0-100",
+                },
+                "ai_note": (dr.document_summary or {}).get("reason", "No document summary available."),
                 "fields": dr.extracted_fields,
+                "financials": dr.financials or {},
                 "reasoning": dr.reasoning,
                 "document_summary": dr.document_summary,
                 "detections": dr.detections,
+                "barcode": dr.barcode_result or {"barcode_found": False, "barcode_decoded": False},
+                "document_quality": dr.quality_metrics or {},
                 "validation": dr.validations,
                 "business_rule": {
                     "rule_version": "v1.0",
@@ -230,10 +244,24 @@ class AIPipelineOrchestrator:
                         "ocr_raw_text": p.ocr_raw_text,
                         "ocr_engine": p.ocr_engine,
                         "ocr_confidence": p.ocr_confidence,
+                        "ocr": {
+                            "raw_text": p.ocr_raw_text,
+                            "engine": p.ocr_engine,
+                            "average_confidence": p.ocr_confidence,
+                            "text_blocks": p.text_blocks or [],
+                        },
+                        "image": {
+                            "width": p.width,
+                            "height": p.height,
+                            "page_width_pt": p.page_width_pt,
+                            "page_height_pt": p.page_height_pt,
+                        },
                         "text_blocks": p.text_blocks,
                         "detections": p.detections,
                         "barcodes": p.barcodes,
                         "extracted_fields": p.extracted_fields,
+                        "document_quality": p.quality_metrics or {},
+                        "ai_note": "Page completed." if not p.errors else p.errors[0].get("error", "Page processing failed."),
                         "errors": p.errors,
                     }
                     for p in dr.pages
@@ -248,6 +276,14 @@ class AIPipelineOrchestrator:
             statuses.COMPLETED if error_count == 0 else return_codes.PARTIAL_SUCCESS,
         )
         result_payload.update({key: value for key, value in envelope.items() if key != "documents"})
+        result_payload["header"].update(
+            {
+                "ai_confidence": folder_confidence,
+                "ai_confidence_level": ConfidenceScore.level(folder_confidence),
+                "confidence_threshold": settings.CONFIDENCE_THRESHOLD,
+                "ai_note": f"{ok_count} OK, {ng_count} NG document(s); folder confidence uses the lowest document score.",
+            }
+        )
 
         # Save final result
         final_result = FinalResult(
@@ -255,15 +291,15 @@ class AIPipelineOrchestrator:
             queue_id=req.queue_id,
             overall_result=overall,
             processing_status=statuses.COMPLETED,
-            ai_confidence=None,
-            ai_confidence_level=None,
-            ai_note=f"Processed {len(doc_results)} documents",
+            ai_confidence=folder_confidence,
+            ai_confidence_level=ConfidenceScore.level(folder_confidence),
+            ai_note=result_payload["header"]["ai_note"],
             ai_return_status=overall,
             ai_return_cd=result_payload["AI_RETURN_CD"],
             ai_return_remark=(
                 f"{ok_count} OK, {ng_count} NG, {error_count} errors" if error_count else "All documents processed"
             ),
-            ai_return_confidence=None,
+            ai_return_confidence=folder_confidence,
             internal_result_json={
                 "documents": result_payload["documents"],
                 "summary": {
@@ -352,7 +388,14 @@ class AIPipelineOrchestrator:
                             }
                         else:
                             ocr = await self._ocr_engine.run(image, extension=_page_ocr_extension(ext))
-                        barcode = await self._barcode_chain.read(image)
+                        barcode = await self._barcode_chain.read(
+                            image,
+                            [
+                                detection
+                                for detection in batch_detections
+                                if detection.get("page_number") == local_index + 1 and detection.get("object_type") == "barcode"
+                            ],
+                        )
                     return ocr, barcode
 
                 page_results = await asyncio.gather(
@@ -385,6 +428,7 @@ class AIPipelineOrchestrator:
                             ocr_engine=ocr_res.get("engine_name", settings.OCR_PROVIDER),
                             ocr_confidence=ocr_res.get("average_confidence"),
                             text_blocks=ocr_res.get("tokens_json", []),
+                            quality_metrics=self._preprocessor.compute_quality(batch[local_index]),
                             detections=[d for d in raw_detections if d.get("page_number") == page_number],
                             barcodes=[bc_res],
                             errors=[{"stage": "PAGE", "error": error}] if error else [],
@@ -393,6 +437,10 @@ class AIPipelineOrchestrator:
                 page_offset += len(batch)
 
             result.pages = page_results_list
+            result.quality_metrics = {
+                "is_colored": bool(result.pages) and all(bool(page.quality_metrics and page.quality_metrics.get("is_colored")) for page in result.pages),
+                "pages": [page.quality_metrics for page in result.pages],
+            }
 
             # Aggregate OCR for field extraction
             visual_text = "\n".join(r.get("raw_text", "") or "" for r in ocr_results if r.get("raw_text"))
@@ -404,9 +452,7 @@ class AIPipelineOrchestrator:
                 ),
                 "raw_text": all_text,
                 "tokens_json": [token for item in ocr_results for token in item.get("tokens_json", []) or []],
-                "average_confidence": (
-                    sum(r.get("average_confidence", 0) or 0 for r in ocr_results) / max(len(ocr_results), 1)
-                ),
+                "average_confidence": _average_confidence(ocr_results),
             }
             if ocr_errors:
                 ocr_aggregated["error"] = ocr_errors[0]
@@ -415,6 +461,7 @@ class AIPipelineOrchestrator:
             candidates = self._field_extractor.collect_document_candidates(ocr_results, doc.document_type)
             fields = self._field_extractor.resolve_document_candidates(candidates)
             fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc.document_type)
+            result.financials = self._field_extractor.build_financials(candidates, fields)
             ocr_aggregated.update(
                 {
                     "invoice_number": fields.get("document_number", {}).get("value"),
@@ -450,18 +497,6 @@ class AIPipelineOrchestrator:
 
             amount = fields.get("transaction_amount", {}).get("value") if fields.get("transaction_amount") else None
 
-            if doc.document_type in {DN, "DELIVERY_NOTE"}:
-                validation = self._rule_evaluator.validate_delivery_note(detections=det_entities)
-            else:
-                validation = self._rule_evaluator.validate_invoice(
-                    ocr=ocr_entity,
-                    detections=list(aggregated.values()),
-                    amount=amount,
-                    confidence=ocr_aggregated.get("average_confidence"),
-                    business_context=req.business_context,
-                )
-
-            # Take first barcode
             bc_final = {"barcode_found": False, "barcode_decoded": False}
             for bc in barcode_results:
                 if bc.get("barcode_decoded"):
@@ -470,6 +505,21 @@ class AIPipelineOrchestrator:
                 if bc.get("barcode_found") and not bc_final.get("barcode_found"):
                     bc_final = bc
             result.barcode_result = bc_final
+
+            if doc.document_type in {DN, "DELIVERY_NOTE"}:
+                validation = self._rule_evaluator.validate_delivery_note(
+                    detections=det_entities, is_colored=result.quality_metrics["is_colored"]
+                )
+            else:
+                validation = self._rule_evaluator.validate_invoice(
+                    ocr=ocr_entity,
+                    detections=list(aggregated.values()),
+                    amount=amount,
+                    confidence=None,
+                    business_context=req.business_context,
+                    barcode_result=bc_final,
+                    is_colored=result.quality_metrics["is_colored"],
+                )
 
             # Confidence
             total_conf = self._confidence_scorer.calculate(
@@ -543,15 +593,3 @@ class AIPipelineOrchestrator:
             await self._job_repo.commit()
             # ponytail: nack with requeue=false so RabbitMQ routes to DLX→DLQ
             await msg.nack(requeue=False)
-
-
-def _merge_ocr_text(native_text: str, visual_text: str) -> str:
-    native = native_text.strip()
-    visual = visual_text.strip()
-    if not native:
-        return visual
-    if not visual or visual in native:
-        return native
-    if native in visual:
-        return visual
-    return f"{native}\n\n{visual}"

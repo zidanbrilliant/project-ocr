@@ -52,13 +52,15 @@ class Settings(BaseSettings):
     OCR_PROVIDER: Literal["nemotron"] = "nemotron"
     OCR_ENABLE_PDF_TEXT_EXTRACTION: bool = True
 
-    CONFIDENCE_THRESHOLD: int = 80
+    CONFIDENCE_THRESHOLD: int = 85
     AMOUNT_MATCH_TOLERANCE: float = 0.0
     AMOUNT_STAMP_DUTY_THRESHOLD: int = 5_000_000
     REQUIRE_SIGNATURE_FOR_INVOICE: bool = False
     REQUIRE_STAMP_FOR_INVOICE: bool = True
     REQUIRE_BARCODE_FOR_INVOICE: bool = False
     REQUIRE_MATERAI_ABOVE_THRESHOLD: bool = True
+    REQUIRE_COLORED_DOCUMENT: bool = True
+    MIN_COLORED_PIXEL_RATIO: float = 0.01
 
     DELIVERY_NOTE_REQUIRED_SIGNATURE_COUNT: int = 2
     DELIVERY_NOTE_REQUIRED_STAMP_COUNT: int = 2
@@ -86,11 +88,9 @@ class Settings(BaseSettings):
     # --- concurrency ---
     MAX_PARALLEL_DOCUMENTS: int = 1
     MAX_PARALLEL_DOWNLOADS: int = 4
-    MAX_PARALLEL_PAGES: int = 1
     PAGE_MICRO_BATCH_SIZE: int = 2
     MAX_INFLIGHT_PAGES: int = 2
     PDF_DEFAULT_DPI: int = 200
-    PDF_FALLBACK_DPI: int = 260
 
     # --- timeouts ---
     DOCUMENT_PROCESSING_TIMEOUT_SECONDS: int = 300

@@ -2,11 +2,12 @@ from typing import Any
 
 from app.domain.entities.detection_result import DetectionResult
 from app.shared.constants.statuses import NG, OK
+from app.shared.config.settings import settings
 
 
 def map_to_entity(detection: dict[str, Any], required: bool = True) -> DetectionResult:
     conf = detection.get("confidence", 0)
-    result = OK if conf is not None and conf >= 40 else NG
+    result = OK if conf is not None and conf >= settings.YOLO_CONFIDENCE_THRESHOLD * 100 else NG
 
     return DetectionResult(
         page_number=detection.get("page_number", 1),

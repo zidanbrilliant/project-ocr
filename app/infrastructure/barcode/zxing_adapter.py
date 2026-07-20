@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Any
 
@@ -11,6 +12,9 @@ class ZXingAdapter:
         self._available = True
 
     async def read(self, image_bytes: bytes) -> dict[str, Any]:
+        return await asyncio.to_thread(self._read_sync, image_bytes)
+
+    def _read_sync(self, image_bytes: bytes) -> dict[str, Any]:
         start = time.monotonic()
         try:
             import cv2

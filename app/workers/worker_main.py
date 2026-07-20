@@ -18,7 +18,6 @@ from app.infrastructure.detection.yolo_adapter import YOLOAdapter
 from app.infrastructure.document_converter.document_validator import DocumentValidator
 from app.infrastructure.document_converter.image_preprocessor import ImagePreprocessor
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
-from app.infrastructure.document_converter.word_converter import WordConverter
 from app.infrastructure.ocr.document_ocr import DocumentOCR
 from app.infrastructure.rabbitmq.connection import RabbitMQConnection
 from app.infrastructure.rabbitmq.consumer import InvoiceRequestConsumer
@@ -54,7 +53,6 @@ class WorkerMain:
 
         self._file_client = ImageServerClient()
         pdf_renderer = PDFRenderer()
-        word_converter = WordConverter()
         preprocessor = ImagePreprocessor()
         validator = DocumentValidator()
         field_extractor = FieldExtractionService()
@@ -89,7 +87,6 @@ class WorkerMain:
                     retry_handler=retry,
                     file_client=self._file_client,
                     pdf_renderer=pdf_renderer,
-                    word_converter=word_converter,
                     preprocessor=preprocessor,
                     ocr_engine=ocr_engine,
                     yolo=yolo,

@@ -44,10 +44,3 @@ class RabbitMQConnection:
     @property
     def is_closed(self) -> bool:
         return self._closed
-
-
-_connection = RabbitMQConnection()
-
-
-async def get_connection() -> RabbitMQConnection:
-    return _connection

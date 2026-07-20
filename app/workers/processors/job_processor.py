@@ -2,6 +2,7 @@ import hashlib
 from typing import Any
 
 from aio_pika.abc import AbstractIncomingMessage
+from sqlalchemy import select
 
 from app.application.dto.request_normalizer import normalize_request
 from app.application.services.ai_pipeline_orchestrator import AIPipelineOrchestrator
@@ -30,8 +31,7 @@ class JobProcessor:
 
         async with async_session_factory() as session:
             existing = await session.execute(
-                __import__("sqlalchemy")
-                .select(AIInboxMessage)
+                select(AIInboxMessage)
                 .where(
                     AIInboxMessage.source_system == normalized.source_system,
                     AIInboxMessage.message_id == normalized.message_id,
@@ -52,7 +52,7 @@ class JobProcessor:
                     trace_id=normalized.trace_id,
                     source_system=normalized.source_system,
                     payload_hash=payload_hash,
-                    payload=payload,
+                    payload={key: value for key, value in payload.items() if key != "_raw_body"},
                     processing_status="PROCESSING",
                 )
                 session.add(inbox_row)
@@ -60,7 +60,7 @@ class JobProcessor:
                 inbox_row.processing_status = "PROCESSING"
             await session.commit()
 
-        completed = await self._orchestrator.process(payload, message)
+        completed = await self._orchestrator.process(normalized, message)
 
         async with async_session_factory() as session:
             row = await session.get(AIInboxMessage, inbox_row.id)

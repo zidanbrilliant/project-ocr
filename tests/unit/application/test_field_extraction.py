@@ -40,6 +40,25 @@ Grand Total: Rp 9.990.000"""
     assert fields["transaction_amount"]["source_label"] == "Grand Total"
 
 
+def test_financials_keep_final_total_and_tax_details_separate() -> None:
+    service = FieldExtractionService()
+    candidates = service.collect_document_candidates(
+        [{"raw_text": "DPP: Rp 9.000.000\nPPN: Rp 990.000\nPotongan Harga: Rp 500.000\nGrand Total: Rp 9.990.000"}]
+    )
+
+    financials = service.build_financials(candidates, service.resolve_document_candidates(candidates))
+
+    assert financials["final_total"]["value"] == 9_990_000.0
+    assert financials["taxable_base"]["value"] == 9_000_000.0
+    assert financials["taxes"][0]["value"] == 990_000.0
+    assert financials["discounts"][0]["value"] == 500_000.0
+
+
+def test_invoice_date_does_not_become_invoice_number() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Invoice Date: 20/06/2026"})
+    assert "document_number" not in fields
+
+
 def test_marks_equally_specific_conflicting_totals_ambiguous() -> None:
     text = """Grand Total: Rp 1.000.000
 Grand Total: Rp 2.000.000"""
@@ -85,7 +104,7 @@ TOTAL\t66.970.740,00"""
     assert fields["transaction_amount"]["value"] == 66_970_740.0
     assert fields["transaction_amount"]["raw_value"] == "66.970.740,00"
     assert fields["transaction_amount"]["source_label"] == "total"
-    assert fields["transaction_amount"]["validation"] == "RECONCILED_DPP_PLUS_TAX_MINUS_DISCOUNT"
+    assert fields["transaction_amount"]["validation"] == "RECONCILED_DPP_PLUS_TAX"
 
 
 def test_preserves_block_evidence_for_each_field() -> None:

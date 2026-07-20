@@ -59,6 +59,7 @@ class PageProcessingResult:
     detections: list[dict[str, Any]] = field(default_factory=list)
     barcodes: list[dict[str, Any]] = field(default_factory=list)
     extracted_fields: list[dict[str, Any]] = field(default_factory=list)
+    financials: dict[str, Any] | None = None
     timings_ms: dict[str, Any] | None = None
     errors: list[dict[str, Any]] = field(default_factory=list)
 
