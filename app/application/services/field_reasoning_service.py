@@ -66,12 +66,16 @@ class FieldReasoningService:
         selected = {
             name: items
             for name, items in candidates.items()
-            if len({str(item.get("value")) for item in items}) > 1
+            if items
             and (
-                name in _CORE_SELECTION_FIELDS
-                or fields.get(name, {}).get("status") == "AMBIGUOUS"
-                or fields[name].get("confidence", 0) < settings.REASONING_CONFIDENCE_THRESHOLD
-                or fields[name].get("validation") == "UNVERIFIED"
+                len({str(item.get("value")) for item in items}) > 1
+                or (
+                    name in _CORE_SELECTION_FIELDS
+                    and (
+                        fields.get(name, {}).get("status") != "FOUND"
+                        or fields.get(name, {}).get("confidence", 0) < settings.REASONING_CONFIDENCE_THRESHOLD
+                    )
+                )
             )
         }
         if not settings.REASONING_ENABLED or not selected:
@@ -88,7 +92,10 @@ class FieldReasoningService:
                 )
                 and not (name == "transaction_date" and item.get("date_role") in _NON_ISSUE_DATE_ROLES)
             ]
-            if len({str(item.get("value")) for item in eligible_items}) < 2:
+            if not eligible_items or (
+                len({str(item.get("value")) for item in eligible_items}) < 2
+                and name not in _CORE_SELECTION_FIELDS
+            ):
                 continue
             indexed: dict[str, dict[str, Any]] = {}
             public_items: list[dict[str, Any]] = []

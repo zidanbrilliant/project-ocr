@@ -141,22 +141,40 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
         ("invoice code", 0.99),
         ("invoice reference", 0.98),
         ("invoice ref", 0.97),
+        ("invoice num", 0.99),
+        ("invoice nomor", 0.99),
+        ("invoice serial number", 0.96),
         ("inv no", 1.0),
         ("inv number", 1.0),
         ("inv id", 0.98),
+        ("inv num", 0.99),
+        ("inv ref", 0.97),
+        ("no inv", 1.0),
         ("nomor invoice", 1.0),
         ("no invoice", 1.0),
+        ("no faktur penjualan", 0.98),
         ("nomor faktur", 0.98),
         ("no faktur", 0.95),
+        ("faktur no", 0.98),
+        ("faktur nomor", 0.98),
         ("nomor nota", 0.95),
         ("no nota", 0.95),
+        ("nomor kuitansi", 0.93),
+        ("no kuitansi", 0.93),
         ("receipt no", 0.92),
         ("receipt number", 0.92),
         ("receipt id", 0.9),
+        ("receipt reference", 0.9),
         ("bill no", 0.9),
         ("bill number", 0.9),
+        ("bill reference", 0.88),
         ("document no", 0.9),
         ("document number", 0.9),
+        ("document id", 0.88),
+        ("nomor dokumen", 0.88),
+        ("nomor referensi", 0.86),
+        ("reference no", 0.86),
+        ("ref no", 0.86),
         ("doc no", 0.88),
         ("faktur penjualan", 0.9),
         ("invoice", 0.85),
@@ -172,20 +190,32 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
     ),
     "transaction_amount": (
         ("grand total", 1.0),
+        ("grand amount", 0.99),
+        ("grand payable", 0.99),
         ("final total", 1.0),
         ("final invoice total", 1.0),
         ("final amount", 0.99),
+        ("final balance", 0.98),
         ("final payable", 0.99),
         ("invoice total", 0.99),
+        ("total invoice", 0.99),
         ("total invoice amount", 0.99),
         ("invoice amount", 0.98),
+        ("invoice grand total", 0.99),
+        ("invoice net total", 0.99),
         ("total bayar", 0.98),
         ("jumlah bayar", 0.98),
         ("total pembayaran", 0.98),
+        ("jumlah pembayaran", 0.98),
+        ("total yang harus dibayar", 0.98),
+        ("jumlah yang harus dibayar", 0.98),
         ("amount due", 0.98),
         ("amount payable", 0.98),
+        ("amount outstanding", 0.97),
+        ("total payable", 0.98),
         ("payable amount", 0.98),
         ("balance due", 0.98),
+        ("balance payable", 0.97),
         ("net payable", 0.98),
         ("net total", 0.98),
         ("total net", 0.98),
@@ -196,13 +226,18 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
         ("total keseluruhan", 0.97),
         ("jumlah total", 0.97),
         ("total akhir", 0.97),
+        ("total tagihan akhir", 0.97),
         ("nilai akhir", 0.97),
         ("nilai tagihan", 0.96),
         ("jumlah tagihan", 0.96),
         ("total tagihan", 0.96),
         ("total faktur", 0.96),
         ("total transaksi", 0.96),
+        ("jumlah terutang", 0.96),
+        ("sisa tagihan", 0.94),
+        ("nilai pembayaran", 0.94),
         ("total amount", 0.95),
+        ("total amount due", 0.97),
         ("net amount", 0.95),
         ("total", 0.75),
     ),
@@ -375,6 +410,8 @@ class FieldExtractionService:
                     str(tokens[index + 1].get("block_id") or f"b{index + 2}"),
                 )
 
+        self._add_nearby_label_values(candidates, lines, doc_type)
+
         # Keep currency-marked alternatives even when a labelled total exists.
         # They let reasoning reject a weak or OCR-corrupted final-total candidate.
         currency_candidates = [
@@ -404,6 +441,35 @@ class FieldExtractionService:
                 source_position=round((line_index + 1) / max(len(lines), 1), 4),
             )
         return candidates
+
+    def _add_nearby_label_values(
+        self,
+        candidates: dict[str, list[dict[str, Any]]],
+        lines: list[tuple[str, Any, str]],
+        doc_type: str | None,
+    ) -> None:
+        """Recover core fields when OCR splits their label and value across nearby lines."""
+        for index, (label, bbox, block_id) in enumerate(lines):
+            name = self._label_name(label)
+            if name not in {"document_number", "transaction_amount"} or self._parse(name, label) is not None:
+                continue
+            parts: list[str] = []
+            for value, _, _ in lines[index + 1 : index + 4]:
+                if self._label_name(value) is not None:
+                    break
+                parts.append(value)
+                joined = " ".join(parts)
+                if self._parse(name, joined) is not None:
+                    self._add_labeled(candidates, label, joined, bbox, "nearby_label_value", doc_type, block_id)
+                    break
+
+    @staticmethod
+    def _label_name(value: str) -> str | None:
+        normalized = FieldExtractionService._normal_label(value)
+        for name, options in _LABELS.items():
+            if any(normalized == alias or normalized.startswith(f"{alias} ") for alias, _ in options):
+                return name
+        return None
 
     @staticmethod
     def _lines_from_tokens(tokens: list[dict[str, Any]]) -> list[tuple[str, Any, str]]:
@@ -474,6 +540,8 @@ class FieldExtractionService:
         )
         if match:
             raw_value = match.group(1)
+            if self._date(raw_value) is not None or _CURRENCY_RE.search(raw_value) or "%" in raw_value:
+                return
             self._add(
                 candidates,
                 "document_number",
@@ -494,10 +562,10 @@ class FieldExtractionService:
         if role_data is None:
             return
         role, label, score = role_data
-        value = self._rightmost_money(line)
-        if value is None:
+        money = self._rightmost_money_pair(line)
+        if money is None:
             return
-        raw_value = list(_MONEY_RE.finditer(line))[-1].group(1)
+        value, raw_value = money
         currency = self._currency(line) or "IDR"
         self._add(
             candidates,
@@ -515,11 +583,26 @@ class FieldExtractionService:
         )
 
     def _financial_role(self, line: str) -> tuple[str, str, float] | None:
-        normalized = self._normal(line)
+        normalized = self._normal_label(line)
+        # Specific non-payable labels must win before the generic final "total" label.
         for role, labels, score in _AMOUNT_ROLES:
-            label = next((item for item in labels if normalized == item or normalized.startswith(f"{item} ")), None)
+            if role == "final_total":
+                continue
+            label = next(
+                (
+                    item
+                    for item in labels
+                    if normalized == item
+                    or normalized.startswith(f"{item} ")
+                    or re.search(rf"(?:^|\s){re.escape(item)}(?:\s|$)", normalized)
+                ),
+                None,
+            )
             if label is not None:
                 return role, label, score
+        for label, score in _LABELS["transaction_amount"]:
+            if normalized == label or normalized.startswith(f"{label} "):
+                return "final_total", label, min(score, 0.98)
         return None
 
     def _add_date_candidate(
@@ -579,14 +662,19 @@ class FieldExtractionService:
         doc_type: str | None,
         block_id: str,
     ) -> None:
-        normalized = self._normal(label)
+        normalized = self._normal_label(label)
         if len(normalized) > 80:
             return
         for name, options in _LABELS.items():
             for alias, score in options:
                 if normalized == alias or normalized.startswith(f"{alias} "):
+                    if name == "transaction_amount":
+                        role_data = self._financial_role(label)
+                        if role_data is not None and role_data[0] != "final_total":
+                            return
                     parsed = self._parse(name, value)
                     if parsed is not None and self._allowed(name, normalized, doc_type):
+                        money = self._rightmost_money_pair(value) if name == "transaction_amount" else None
                         extra = (
                             {"amount_role": "final_total", "currency": self._currency(value) or "IDR"}
                             if name == "transaction_amount"
@@ -601,7 +689,7 @@ class FieldExtractionService:
                             method,
                             f"{label}: {value}",
                             label,
-                            value,
+                            money[1] if money else value,
                             source_block_id=block_id,
                             **extra,
                         )
@@ -752,10 +840,12 @@ class FieldExtractionService:
 
     def _parse(self, name: str, value: str) -> Any | None:
         if name in {"document_number", "billing_number"}:
+            if self._date(value) is not None or _CURRENCY_RE.search(value) or "%" in value:
+                return None
             matches = _NUMBER_RE.findall(self._normalize_document_number(value))
             return max(matches, key=len) if matches else None
         if name == "transaction_amount":
-            return self._money(value)
+            return self._rightmost_money(value)
         if name == "transaction_date":
             return self._date(value)
         if name == "vendor_name":
@@ -767,16 +857,24 @@ class FieldExtractionService:
         return re.sub(r"\s*([/.\-])\s*", r"\1", value.strip())
 
     @staticmethod
-    def _money(value: str) -> float | None:
-        match = _MONEY_RE.search(value)
-        amount = MoneyAmount.parse_rupiah(match.group(1)) if match else None
-        return amount.value if amount else None
+    def _rightmost_money(value: str) -> float | None:
+        money = FieldExtractionService._rightmost_money_pair(value)
+        return money[0] if money else None
 
     @staticmethod
-    def _rightmost_money(value: str) -> float | None:
-        matches = list(_MONEY_RE.finditer(value))
+    def _rightmost_money_pair(value: str) -> tuple[float, str] | None:
+        currency_matches = []
+        for match in _CURRENCY_RE.finditer(value):
+            raw = match.group("prefix_amount") or match.group("suffix_amount")
+            if raw and not value[match.end() :].lstrip().startswith("%"):
+                amount = MoneyAmount.parse_rupiah(raw)
+                if amount:
+                    currency_matches.append((amount.value, raw))
+        if currency_matches:
+            return currency_matches[-1]
+        matches = [match for match in _MONEY_RE.finditer(value) if not value[match.end() :].lstrip().startswith("%")]
         amount = MoneyAmount.parse_rupiah(matches[-1].group(1)) if matches else None
-        return amount.value if amount else None
+        return (amount.value, matches[-1].group(1)) if amount else None
 
     @staticmethod
     def _date(value: str) -> str | None:
@@ -840,6 +938,22 @@ class FieldExtractionService:
     @staticmethod
     def _normal(value: str) -> str:
         return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
+
+    @staticmethod
+    def _normal_label(value: str) -> str:
+        """Correct only predictable OCR mistakes in labels, never in extracted values."""
+        normalized = FieldExtractionService._normal(value)
+        replacements = {
+            "lnvoice": "invoice",
+            "inv0ice": "invoice",
+            "invo1ce": "invoice",
+            "t0tal": "total",
+            "tota1": "total",
+            "am0unt": "amount",
+            "n0mor": "nomor",
+            "n0": "no",
+        }
+        return " ".join(replacements.get(word, word) for word in normalized.split())
 
     @staticmethod
     def _spatially_related(label_bbox: Any, value_bbox: Any) -> bool:

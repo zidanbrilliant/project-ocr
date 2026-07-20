@@ -204,6 +204,66 @@ def test_extracts_spaced_invoice_id_without_colon() -> None:
     assert fields["document_number"]["value"] == "RI/2301-A77"
 
 
+def test_recovers_invoice_number_and_total_split_across_three_ocr_lines() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {
+            "raw_text": """Invoice Serial Number
+RI
+-
+23014073
+Grand Amount
+USD
+1,240.50"""
+        }
+    )
+
+    assert fields["document_number"]["value"] == "RI-23014073"
+    assert fields["document_number"]["extraction_method"] == "nearby_label_value"
+    assert fields["transaction_amount"]["value"] == 1240.5
+    assert fields["transaction_amount"]["currency"] == "USD"
+    assert fields["transaction_amount"]["extraction_method"] == "nearby_label_value"
+
+
+def test_total_tax_is_not_misclassified_as_final_total() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Total PPN: Rp 110.000\nGrand Total: Rp 1.110.000"}
+    )
+
+    assert fields["transaction_amount"]["value"] == 1_110_000.0
+    assert fields["transaction_amount"]["amount_role"] == "final_total"
+
+
+def test_total_amount_ignores_percent_after_currency_value() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Total Amount Due: USD 1,240.50 including VAT 11%"}
+    )
+
+    assert fields["transaction_amount"]["value"] == 1240.5
+    assert fields["transaction_amount"]["raw_value"] == "1,240.50"
+
+
+def test_handles_common_ocr_typos_in_invoice_and_total_labels() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Invoice N0: RI - 23014073\nGRAND T0TAL: USD 1,240.50"}
+    )
+
+    assert fields["document_number"]["value"] == "RI-23014073"
+    assert fields["transaction_amount"]["value"] == 1240.5
+
+
+def test_accepts_expanded_total_label_without_a_separator() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Grand Amount USD 1,240.50"})
+
+    assert fields["transaction_amount"]["value"] == 1240.5
+    assert fields["transaction_amount"]["amount_role"] == "final_total"
+
+
+def test_invoice_label_does_not_accept_a_date_as_identifier() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Invoice Number: 20/07/2026"})
+
+    assert "document_number" not in fields
+
+
 def test_rebuilds_native_pdf_words_into_invoice_rows() -> None:
     fields = FieldExtractionService().extract_from_ocr(
         {

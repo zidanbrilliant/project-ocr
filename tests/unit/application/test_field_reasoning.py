@@ -129,3 +129,21 @@ def test_reasoning_does_not_replace_reconciled_final_total(monkeypatch) -> None:
 
     assert resolved["transaction_amount"]["value"] == 110.0
     assert audit["used"] is False
+
+
+def test_reasoning_checks_a_single_weak_core_candidate(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class RejectingAdapter(_Adapter):
+        async def select(self, request):
+            assert request["candidates"]["transaction_amount"][0]["value"] == 999.0
+            return {"decisions": []}
+
+    fields = {"transaction_amount": {"value": 999.0, "status": "FOUND", "confidence": 0.62}}
+    candidates = {"transaction_amount": [{"value": 999.0, "confidence": 0.62, "source_text": "USD 999"}]}
+
+    resolved, audit = asyncio.run(FieldReasoningService(RejectingAdapter()).resolve(fields, candidates, "INV"))
+
+    assert resolved == fields
+    assert audit["used"] is False
+    assert audit["engine"] == "qwen3.5-9b"
