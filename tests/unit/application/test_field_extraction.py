@@ -272,16 +272,22 @@ def test_harvests_invoice_and_balance_due_values_before_their_labels() -> None:
     assert total["candidate_only"] and total["label_relation"] == "before_label"
 
 
-def test_harvests_unlabelled_identifier_for_qwen_without_resolving_it_deterministically() -> None:
+def test_rejects_unlabelled_identifier_without_invoice_evidence() -> None:
     service = FieldExtractionService()
     candidates = service.collect_document_candidates([{"raw_text": "RI - 23014073\nSupplier copy"}])
     fields = service.resolve_document_candidates(candidates)
 
-    assert fields["document_number"]["status"] == "NOT_FOUND"
-    assert any(
-        item["value"] == "RI-23014073" and item["candidate_only"]
-        for item in candidates["document_number"]
+    assert fields == {}
+    assert "document_number" not in candidates
+
+
+def test_collects_each_inline_core_value_once() -> None:
+    candidates = FieldExtractionService().collect_document_candidates(
+        [{"raw_text": "Invoice No: INV-77\nGrand Total: Rp 1.100.000"}]
     )
+
+    assert [item["value"] for item in candidates["document_number"]] == ["INV-77"]
+    assert [item["value"] for item in candidates["transaction_amount"]] == [1_100_000.0]
 
 
 def test_generic_total_does_not_create_a_context_label_candidate() -> None:

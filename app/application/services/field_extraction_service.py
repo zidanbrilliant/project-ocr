@@ -47,46 +47,6 @@ _MONTHS = {
 }
 
 _AMOUNT_ROLES: tuple[tuple[str, tuple[str, ...], float], ...] = (
-    (
-        "final_total",
-        (
-            "grand total",
-            "final total",
-            "final invoice total",
-            "final amount",
-            "final payable",
-            "invoice total",
-            "total invoice amount",
-            "invoice amount",
-            "total bayar",
-            "jumlah bayar",
-            "total pembayaran",
-            "amount due",
-            "amount payable",
-            "payable amount",
-            "balance due",
-            "net payable",
-            "net total",
-            "total net",
-            "total due",
-            "total after tax",
-            "total including tax",
-            "total incl tax",
-            "total keseluruhan",
-            "jumlah total",
-            "total akhir",
-            "nilai akhir",
-            "nilai tagihan",
-            "jumlah tagihan",
-            "total tagihan",
-            "total faktur",
-            "total transaksi",
-            "total amount",
-            "net amount",
-            "total",
-        ),
-        0.98,
-    ),
     ("subtotal", ("jumlah harga jual", "subtotal", "sub total", "amount before tax"), 0.45),
     ("discount", ("dikurangi potongan harga", "potongan harga", "discount"), 0.35),
     ("tax_base", ("dasar pengenaan pajak", "taxable amount", "tax base", "dpp"), 0.25),
@@ -393,9 +353,12 @@ class FieldExtractionService:
             label, value = self._split_label_value(line)
             if label and value:
                 self._add_labeled(candidates, label, value, bbox, "label_value", doc_type, block_id)
-            self._add_document_number(candidates, line, bbox, block_id, doc_type)
-            self._add_raw_document_number_candidates(candidates, line, bbox, block_id, line_index, len(lines))
-            self._add_financial_row(candidates, line, bbox, block_id)
+                role_data = self._financial_role(label)
+                if role_data is not None and role_data[0] != "final_total":
+                    self._add_financial_row(candidates, line, bbox, block_id)
+            else:
+                self._add_document_number(candidates, line, bbox, block_id, doc_type)
+                self._add_financial_row(candidates, line, bbox, block_id)
             self._add_date_candidate(candidates, line, bbox, block_id, line_index, lines)
 
         # Nemotron may emit a label and its value in adjacent semantic blocks.
@@ -438,34 +401,6 @@ class FieldExtractionService:
                 )
         return candidates
 
-    def _add_raw_document_number_candidates(
-        self,
-        candidates: dict[str, list[dict[str, Any]]],
-        line: str,
-        bbox: Any,
-        block_id: str,
-        line_index: int,
-        line_count: int,
-    ) -> None:
-        """Offer identifier-shaped OCR spans to Qwen; never select them deterministically."""
-        for raw_value in _NUMBER_RE.findall(self._normalize_document_number(line)):
-            value = self._parse("document_number", raw_value)
-            if value is None or not self._context_document_number_is_safe(str(value)):
-                continue
-            self._add(
-                candidates,
-                "document_number",
-                value,
-                0.2,
-                bbox,
-                "raw_identifier_candidate",
-                line,
-                raw_value=raw_value,
-                source_block_id=block_id,
-                source_position=round((line_index + 1) / max(line_count, 1), 4),
-                candidate_only=True,
-            )
-
     def _add_bidirectional_context_candidates(
         self,
         candidates: dict[str, list[dict[str, Any]]],
@@ -477,9 +412,8 @@ class FieldExtractionService:
             for name, alias, score in self._context_labels(label):
                 if name not in _CONTEXT_FIELDS or score < _CONTEXT_LABEL_MIN_SCORE:
                     continue
-                self._add_context_candidate(
-                    candidates, name, label, alias, score, bbox, block_id, "same_line", 0, doc_type
-                )
+                if self._parse(name, label) is not None:
+                    continue
                 for distance in range(1, 4):
                     before_index = index - distance
                     if before_index >= 0:
@@ -992,6 +926,7 @@ class FieldExtractionService:
         if name in {"document_number", "billing_number"}:
             if self._date(value) is not None or _CURRENCY_RE.search(value) or "%" in value:
                 return None
+            value = re.sub(r"(?i)^\s*(?:no\.?|number|nomor|id|code|reference|ref)\s*[:#\-]?\s*", "", value)
             matches = _NUMBER_RE.findall(self._normalize_document_number(value))
             return max(matches, key=len) if matches else None
         if name == "transaction_amount":
