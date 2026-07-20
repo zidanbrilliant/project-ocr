@@ -123,21 +123,32 @@ def test_does_not_pair_adjacent_blocks_without_geometry() -> None:
     assert "vendor_name" not in fields
 
 
-def test_uses_largest_currency_amount_when_total_label_is_missing() -> None:
-    fields = FieldExtractionService().extract_from_ocr(
-        {"raw_text": "Harga Barang Rp 900.000\nPPN Rp 99.000\nRp 999.000"}
+def test_defers_unlabelled_currency_amounts_to_reasoning_when_total_label_is_missing() -> None:
+    service = FieldExtractionService()
+    candidates = service.collect_document_candidates(
+        [
+            {
+                "raw_text": "Harga Barang Rp 900.000\nPPN Rp 99.000\nRp 999.000",
+            }
+        ]
+    )
+    fields = service.resolve_document_candidates(candidates)
+
+    assert fields["transaction_amount"]["value"] is None
+    unlabelled = [item for item in candidates["transaction_amount"] if item["amount_role"] == "unlabelled_currency"]
+    assert unlabelled and all(item["candidate_only"] for item in unlabelled)
+    assert {item["value"] for item in candidates["transaction_amount"]} == {900_000.0, 99_000.0, 999_000.0}
+
+
+def test_defers_usd_amount_candidates_to_reasoning() -> None:
+    service = FieldExtractionService()
+    candidates = service.collect_document_candidates(
+        [{"raw_text": "Unit Price USD 100.00\nTax USD 11.00\nUSD 111.00"}]
     )
 
-    assert fields["transaction_amount"]["value"] == 999_000.0
-    assert fields["transaction_amount"]["currency"] == "IDR"
-    assert fields["transaction_amount"]["extraction_method"] == "currency_largest_fallback"
-
-
-def test_supports_usd_total_fallback() -> None:
-    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Unit Price USD 100.00\nTax USD 11.00\nUSD 111.00"})
-
-    assert fields["transaction_amount"]["value"] == 111.0
-    assert fields["transaction_amount"]["currency"] == "USD"
+    assert {item["value"] for item in candidates["transaction_amount"]} == {100.0, 11.0, 111.0}
+    unlabelled = [item for item in candidates["transaction_amount"] if item["amount_role"] == "unlabelled_currency"]
+    assert unlabelled and all(item["candidate_only"] for item in unlabelled)
 
 
 def test_extracts_invoice_reference_and_final_total() -> None:
@@ -151,14 +162,14 @@ def test_extracts_invoice_reference_and_final_total() -> None:
     assert fields["transaction_amount"]["amount_role"] == "final_total"
 
 
-def test_uses_largest_jpy_currency_amount_when_total_label_is_missing() -> None:
-    fields = FieldExtractionService().extract_from_ocr(
-        {"raw_text": "Item JPY 12,500\nTax JPY 1,250\nJPY 24,000\nJPY 18,000"}
+def test_defers_jpy_currency_amounts_to_reasoning() -> None:
+    candidates = FieldExtractionService().collect_document_candidates(
+        [{"raw_text": "Item JPY 12,500\nTax JPY 1,250\nJPY 24,000\nJPY 18,000"}]
     )
 
-    assert fields["transaction_amount"]["value"] == 24_000.0
-    assert fields["transaction_amount"]["currency"] == "JPY"
-    assert fields["transaction_amount"]["extraction_method"] == "currency_largest_fallback"
+    assert {item["value"] for item in candidates["transaction_amount"]} == {12_500.0, 1_250.0, 24_000.0, 18_000.0}
+    unlabelled = [item for item in candidates["transaction_amount"] if item["amount_role"] == "unlabelled_currency"]
+    assert unlabelled and all(item["candidate_only"] for item in unlabelled)
 
 
 def test_supports_jpy_currency_symbol_for_explicit_final_total() -> None:
@@ -168,10 +179,10 @@ def test_supports_jpy_currency_symbol_for_explicit_final_total() -> None:
     assert fields["transaction_amount"]["currency"] == "JPY"
 
 
-def test_does_not_compare_largest_fallback_across_currencies() -> None:
+def test_does_not_accept_unlabelled_currency_values_deterministically() -> None:
     fields = FieldExtractionService().extract_from_ocr({"raw_text": "USD 120.00\nJPY 24,000"})
 
-    assert fields["transaction_amount"]["status"] == "AMBIGUOUS"
+    assert fields["transaction_amount"]["status"] == "NOT_FOUND"
     assert fields["transaction_amount"]["candidate_count"] == 2
 
 
@@ -205,7 +216,9 @@ def test_extracts_spaced_invoice_id_without_colon() -> None:
 
 
 def test_recovers_invoice_number_and_total_split_across_three_ocr_lines() -> None:
-    fields = FieldExtractionService().extract_from_ocr(
+    service = FieldExtractionService()
+    candidates = service.collect_document_candidates(
+        [
         {
             "raw_text": """Invoice Serial Number
 RI
@@ -215,13 +228,58 @@ Grand Amount
 USD
 1,240.50"""
         }
+        ]
     )
 
-    assert fields["document_number"]["value"] == "RI-23014073"
-    assert fields["document_number"]["extraction_method"] == "nearby_label_value"
-    assert fields["transaction_amount"]["value"] == 1240.5
-    assert fields["transaction_amount"]["currency"] == "USD"
-    assert fields["transaction_amount"]["extraction_method"] == "nearby_label_value"
+    invoice = next(
+        item
+        for item in candidates["document_number"]
+        if item["value"] == "RI-23014073" and item["extraction_method"] == "context_label_value"
+    )
+    total = next(
+        item
+        for item in candidates["transaction_amount"]
+        if item["value"] == 1240.5 and item["extraction_method"] == "context_label_value"
+    )
+    assert invoice["candidate_only"] and invoice["label_relation"] == "after_label"
+    assert total["candidate_only"] and total["extraction_method"] == "context_label_value"
+
+
+def test_harvests_invoice_and_balance_due_values_before_their_labels() -> None:
+    candidates = FieldExtractionService().collect_document_candidates(
+        [{"raw_text": "RI - 23014073\nInvoice Number\nUSD 1,240.50\nBalance Due"}]
+    )
+
+    invoice = next(
+        item
+        for item in candidates["document_number"]
+        if item["value"] == "RI-23014073" and item["extraction_method"] == "context_label_value"
+    )
+    total = next(
+        item
+        for item in candidates["transaction_amount"]
+        if item["value"] == 1240.5 and item["extraction_method"] == "context_label_value"
+    )
+    assert invoice["candidate_only"] and invoice["label_relation"] == "before_label"
+    assert total["candidate_only"] and total["label_relation"] == "before_label"
+
+
+def test_harvests_unlabelled_identifier_for_qwen_without_resolving_it_deterministically() -> None:
+    service = FieldExtractionService()
+    candidates = service.collect_document_candidates([{"raw_text": "RI - 23014073\nSupplier copy"}])
+    fields = service.resolve_document_candidates(candidates)
+
+    assert fields["document_number"]["status"] == "NOT_FOUND"
+    assert any(
+        item["value"] == "RI-23014073" and item["candidate_only"]
+        for item in candidates["document_number"]
+    )
+
+
+def test_generic_total_does_not_create_a_context_label_candidate() -> None:
+    candidates = FieldExtractionService().collect_document_candidates([{"raw_text": "Total\nUSD 999.00"}])
+
+    assert not any(item["extraction_method"] == "context_label_value" for item in candidates["transaction_amount"])
 
 
 def test_total_tax_is_not_misclassified_as_final_total() -> None:

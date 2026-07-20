@@ -117,6 +117,8 @@ class FieldReasoningService:
                         "block_id": item.get("source_block_id"),
                         "bbox": item.get("source_bbox"),
                         "document_position": item.get("source_position"),
+                        "label_relation": item.get("label_relation"),
+                        "label_distance": item.get("label_distance"),
                     }
                 )
             candidate_index[name] = indexed

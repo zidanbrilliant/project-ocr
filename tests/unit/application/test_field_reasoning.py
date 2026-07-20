@@ -147,3 +147,67 @@ def test_reasoning_checks_a_single_weak_core_candidate(monkeypatch) -> None:
     assert resolved == fields
     assert audit["used"] is False
     assert audit["engine"] == "qwen3.5-9b"
+
+
+def test_reasoning_receives_candidate_label_relation(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class RelationAdapter(_Adapter):
+        async def select(self, request):
+            candidate = request["candidates"]["transaction_amount"][0]
+            assert candidate["label_relation"] == "before_label"
+            assert candidate["label_distance"] == 1
+            return {"decisions": []}
+
+    fields = {"transaction_amount": {"value": 1240.5, "status": "FOUND", "confidence": 0.78}}
+    candidates = {
+        "transaction_amount": [
+            {
+                "value": 1240.5,
+                "confidence": 0.78,
+                "score": 0.78,
+                "source_text": "USD 1,240.50\nBalance Due",
+                "label_relation": "before_label",
+                "label_distance": 1,
+            }
+        ]
+    }
+
+    _, audit = asyncio.run(FieldReasoningService(RelationAdapter()).resolve(fields, candidates, "INV"))
+
+    assert audit["engine"] == "qwen3.5-9b"
+
+
+def test_reasoning_can_select_a_raw_identifier_candidate(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class IdentifierAdapter(_Adapter):
+        async def select(self, request):
+            assert request["candidates"]["document_number"][0]["value"] == "RI-23014073"
+            return {
+                "decisions": [
+                    {
+                        "field_name": "document_number",
+                        "candidate_id": "document_number-0",
+                        "reason_code": "COMMERCIAL_DOCUMENT_NUMBER",
+                    }
+                ]
+            }
+
+    fields = {"document_number": {"value": None, "status": "NOT_FOUND", "confidence": 0.0}}
+    candidates = {
+        "document_number": [
+            {
+                "value": "RI-23014073",
+                "confidence": 0.2,
+                "score": 0.2,
+                "source_text": "RI - 23014073\nInvoice Number",
+                "candidate_only": True,
+            }
+        ]
+    }
+
+    resolved, audit = asyncio.run(FieldReasoningService(IdentifierAdapter()).resolve(fields, candidates, "INV"))
+
+    assert resolved["document_number"]["value"] == "RI-23014073"
+    assert audit["resolved_fields"] == ["document_number"]

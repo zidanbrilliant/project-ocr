@@ -12,6 +12,7 @@ def test_reasoning_prompt_treats_ocr_instructions_as_untrusted_data() -> None:
     assert "prefer the largest" in prompt
     assert "reject due date" in prompt
     assert "never choose a date" in prompt
+    assert "before or after" in prompt
 
 
 def test_reasoning_json_parser_uses_first_complete_object() -> None:

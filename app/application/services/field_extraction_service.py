@@ -110,6 +110,8 @@ _NON_PAYABLE_ROLES = {
     "paid",
 }
 _NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period"}
+_CONTEXT_FIELDS = {"document_number", "transaction_amount"}
+_CONTEXT_LABEL_MIN_SCORE = 0.9
 
 
 def _valid_bbox(value: Any) -> bool:
@@ -392,6 +394,7 @@ class FieldExtractionService:
             if label and value:
                 self._add_labeled(candidates, label, value, bbox, "label_value", doc_type, block_id)
             self._add_document_number(candidates, line, bbox, block_id, doc_type)
+            self._add_raw_document_number_candidates(candidates, line, bbox, block_id, line_index, len(lines))
             self._add_financial_row(candidates, line, bbox, block_id)
             self._add_date_candidate(candidates, line, bbox, block_id, line_index, len(lines))
 
@@ -410,7 +413,7 @@ class FieldExtractionService:
                     str(tokens[index + 1].get("block_id") or f"b{index + 2}"),
                 )
 
-        self._add_nearby_label_values(candidates, lines, doc_type)
+        self._add_bidirectional_context_candidates(candidates, lines, doc_type)
 
         # Keep currency-marked alternatives even when a labelled total exists.
         # They let reasoning reject a weak or OCR-corrupted final-total candidate.
@@ -439,37 +442,151 @@ class FieldExtractionService:
                 currency=currency,
                 amount_role="unlabelled_currency",
                 source_position=round((line_index + 1) / max(len(lines), 1), 4),
+                candidate_only=True,
             )
         return candidates
 
-    def _add_nearby_label_values(
+    def _add_raw_document_number_candidates(
+        self,
+        candidates: dict[str, list[dict[str, Any]]],
+        line: str,
+        bbox: Any,
+        block_id: str,
+        line_index: int,
+        line_count: int,
+    ) -> None:
+        """Offer identifier-shaped OCR spans to Qwen without accepting them deterministically."""
+        for raw_value in _NUMBER_RE.findall(self._normalize_document_number(line)):
+            value = self._parse("document_number", raw_value)
+            if value is None or not self._context_document_number_is_safe(str(value)):
+                continue
+            self._add(
+                candidates,
+                "document_number",
+                value,
+                0.2,
+                bbox,
+                "raw_identifier_candidate",
+                line,
+                raw_value=raw_value,
+                source_block_id=block_id,
+                source_position=round((line_index + 1) / max(line_count, 1), 4),
+                candidate_only=True,
+            )
+
+    def _add_bidirectional_context_candidates(
         self,
         candidates: dict[str, list[dict[str, Any]]],
         lines: list[tuple[str, Any, str]],
         doc_type: str | None,
     ) -> None:
-        """Recover core fields when OCR splits their label and value across nearby lines."""
+        """Harvest values around strong labels; value may be before or after its label."""
         for index, (label, bbox, block_id) in enumerate(lines):
-            name = self._label_name(label)
-            if name not in {"document_number", "transaction_amount"} or self._parse(name, label) is not None:
-                continue
-            parts: list[str] = []
-            for value, _, _ in lines[index + 1 : index + 4]:
-                if self._label_name(value) is not None:
-                    break
-                parts.append(value)
-                joined = " ".join(parts)
-                if self._parse(name, joined) is not None:
-                    self._add_labeled(candidates, label, joined, bbox, "nearby_label_value", doc_type, block_id)
-                    break
+            for name, alias, score in self._context_labels(label):
+                if name not in _CONTEXT_FIELDS or score < _CONTEXT_LABEL_MIN_SCORE:
+                    continue
+                self._add_context_candidate(
+                    candidates, name, label, alias, score, bbox, block_id, "same_line", 0, doc_type
+                )
+                for distance in range(1, 4):
+                    before_index = index - distance
+                    if before_index >= 0:
+                        text = "\n".join(line[0] for line in lines[before_index:index])
+                        self._add_context_candidate(
+                            candidates,
+                            name,
+                            text,
+                            alias,
+                            score,
+                            lines[before_index][1],
+                            lines[before_index][2],
+                            "before_label",
+                            distance,
+                            doc_type,
+                        )
+                    after_index = index + distance
+                    if after_index < len(lines):
+                        text = "\n".join(line[0] for line in lines[index + 1 : after_index + 1])
+                        self._add_context_candidate(
+                            candidates,
+                            name,
+                            text,
+                            alias,
+                            score,
+                            lines[index + 1][1],
+                            lines[index + 1][2],
+                            "after_label",
+                            distance,
+                            doc_type,
+                        )
+
+    def _add_context_candidate(
+        self,
+        candidates: dict[str, list[dict[str, Any]]],
+        name: str,
+        value_text: str,
+        label: str,
+        label_score: float,
+        bbox: Any,
+        block_id: str,
+        relation: str,
+        distance: int,
+        doc_type: str | None,
+    ) -> None:
+        parsed = self._parse(name, value_text)
+        if parsed is None:
+            return
+        if name == "document_number" and not self._context_document_number_is_safe(str(parsed)):
+            return
+        if name == "transaction_amount" and not self._currency_amounts(value_text):
+            return
+        if not self._allowed(name, label, doc_type):
+            return
+        money = self._rightmost_money_pair(value_text) if name == "transaction_amount" else None
+        self._add(
+            candidates,
+            name,
+            parsed,
+            min(label_score, 0.8) - distance * 0.02,
+            bbox,
+            "context_label_value",
+            value_text,
+            source_label=label,
+            raw_value=money[1] if money else value_text.strip(),
+            source_block_id=block_id,
+            label_relation=relation,
+            label_distance=distance,
+            candidate_only=True,
+            **(
+                {"amount_role": "final_total", "currency": self._currency(value_text) or "UNKNOWN"}
+                if name == "transaction_amount"
+                else {}
+            ),
+        )
 
     @staticmethod
-    def _label_name(value: str) -> str | None:
-        normalized = FieldExtractionService._normal_label(value)
+    def _context_document_number_is_safe(value: str) -> bool:
+        return (value.isdigit() and len(value) >= 6) or (any(char.isalpha() for char in value) and any(char.isdigit() for char in value))
+
+    def _context_labels(self, value: str) -> list[tuple[str, str, float]]:
+        normalized = self._normal_label(value)
+        matches: list[tuple[str, str, float]] = []
         for name, options in _LABELS.items():
-            if any(normalized == alias or normalized.startswith(f"{alias} ") for alias, _ in options):
-                return name
-        return None
+            for alias, score in options:
+                if re.search(rf"(?:^|\s){re.escape(alias)}(?:\s|$)", normalized):
+                    if name == "transaction_amount" and self._has_non_payable_label(normalized):
+                        continue
+                    matches.append((name, alias, score))
+        return matches
+
+    @staticmethod
+    def _has_non_payable_label(normalized: str) -> bool:
+        return any(
+            re.search(rf"(?:^|\s){re.escape(alias)}(?:\s|$)", normalized)
+            for role, aliases, _ in _AMOUNT_ROLES
+            if role != "final_total"
+            for alias in aliases
+        )
 
     @staticmethod
     def _lines_from_tokens(tokens: list[dict[str, Any]]) -> list[tuple[str, Any, str]]:
@@ -739,6 +856,10 @@ class FieldExtractionService:
         )
 
     def _resolve(self, name: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        deterministic_items = [item for item in items if not item.get("candidate_only")]
+        if not deterministic_items:
+            return self._not_found(items)
+        items = deterministic_items
         if name == "transaction_amount":
             items = self._validate_amount_candidates(items)
             eligible = [item for item in items if item.get("amount_role") not in _NON_PAYABLE_ROLES]
