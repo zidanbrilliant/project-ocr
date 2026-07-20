@@ -6,7 +6,9 @@ from app.infrastructure.reasoning.qwen_reasoning_adapter import QwenReasoningAda
 from app.shared.config.settings import settings
 
 _FIELD_DEFINITIONS = {
-    "document_number": "commercial invoice or document number, not a tax invoice number unless the document is tax invoice",
+    "document_number": (
+        "commercial invoice or document number, not a tax invoice number unless the document is tax invoice"
+    ),
     "billing_number": "billing or payment reference number",
     "transaction_amount": "final payable amount, not DPP, PPN, subtotal, or unit price",
     "transaction_date": "document issuance or invoice date",
@@ -20,6 +22,7 @@ _REASON_CODES = {
     "transaction_date": {"DOCUMENT_ISSUE_DATE"},
     "vendor_name": {"SELLER_OR_ISSUER"},
 }
+_CORE_SELECTION_FIELDS = {"document_number", "transaction_amount", "transaction_date"}
 
 
 class FieldReasoningService:
@@ -45,8 +48,10 @@ class FieldReasoningService:
         selected = {
             name: items
             for name, items in candidates.items()
-            if len(items) > 1 and (
-                fields.get(name, {}).get("status") == "AMBIGUOUS"
+            if len({str(item.get("value")) for item in items}) > 1
+            and (
+                name in _CORE_SELECTION_FIELDS
+                or fields.get(name, {}).get("status") == "AMBIGUOUS"
                 or fields[name].get("confidence", 0) < settings.REASONING_CONFIDENCE_THRESHOLD
                 or fields[name].get("validation") == "UNVERIFIED"
             )
@@ -59,17 +64,26 @@ class FieldReasoningService:
         for name, items in selected.items():
             indexed: dict[str, dict[str, Any]] = {}
             public_items: list[dict[str, Any]] = []
-            for index, item in enumerate(sorted(items, key=lambda item: item.get("score", item["confidence"]), reverse=True)[:8]):
+            for index, item in enumerate(
+                sorted(items, key=lambda item: item.get("score", item["confidence"]), reverse=True)[:8]
+            ):
                 candidate_id = f"{name}-{index}"
                 indexed[candidate_id] = item
-                public_items.append({
-                    "candidate_id": candidate_id,
-                    "value": item["value"],
-                    "label": item.get("source_label"),
-                    "source_text": str(item.get("source_text", ""))[:500],
-                    "page": item.get("source_page_number"),
-                    "block_id": item.get("source_block_id"),
-                })
+                public_items.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "value": item["value"],
+                        "label": item.get("source_label"),
+                        "confidence": item.get("confidence"),
+                        "currency": item.get("currency"),
+                        "amount_role": item.get("amount_role"),
+                        "source_text": str(item.get("source_text", ""))[:500],
+                        "page": item.get("source_page_number"),
+                        "block_id": item.get("source_block_id"),
+                        "bbox": item.get("source_bbox"),
+                        "document_position": item.get("source_position"),
+                    }
+                )
             candidate_index[name] = indexed
             payload_fields[name] = public_items
 
@@ -93,12 +107,14 @@ class FieldReasoningService:
             reason_code = str(decision.get("reason_code", ""))
             if reason_code not in _REASON_CODES.get(name, set()):
                 reason_code = "MODEL_SELECTED_CANDIDATE"
-            chosen.update({
-                "status": "FOUND",
-                # Model confidence is not calibrated. Preserve deterministic evidence score.
-                "reason_code": reason_code,
-                "reasoning_engine": "qwen3.5-9b",
-            })
+            chosen.update(
+                {
+                    "status": "FOUND",
+                    # Model confidence is not calibrated. Preserve deterministic evidence score.
+                    "reason_code": reason_code,
+                    "reasoning_engine": "qwen3.5-9b",
+                }
+            )
             resolved[name] = chosen
             applied.append(name)
         return resolved, {
@@ -123,11 +139,15 @@ class FieldReasoningService:
         summarize = getattr(self._adapter, "summarize", None)
         if not settings.REASONING_ENABLED or not self._adapter.is_available or not callable(summarize):
             return fallback
-        reply = await summarize({
-            "document_result": document_result,
-            "verified_fields": {name: field.get("value") for name, field in fields.items()},
-            "failed_rules": [{"rule_id": rule.get("rule_id"), "rule_name": rule.get("rule_name")} for rule in failed_rules],
-        })
+        reply = await summarize(
+            {
+                "document_result": document_result,
+                "verified_fields": {name: field.get("value") for name, field in fields.items()},
+                "failed_rules": [
+                    {"rule_id": rule.get("rule_id"), "rule_name": rule.get("rule_name")} for rule in failed_rules
+                ],
+            }
+        )
         rule_ids = reply.get("rule_ids")
         summary = reply.get("summary")
         allowed = {str(rule.get("rule_id")) for rule in failed_rules}

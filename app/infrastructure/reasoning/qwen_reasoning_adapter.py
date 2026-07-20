@@ -65,9 +65,13 @@ class QwenReasoningAdapter:
                 raise FileNotFoundError(f"Model directory not found: {model_dir}")
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
             dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
-            model = AutoModelForCausalLM.from_pretrained(
-                model_dir, local_files_only=True, trust_remote_code=True, torch_dtype=dtype
-            ).to(device).eval()
+            model = (
+                AutoModelForCausalLM.from_pretrained(
+                    model_dir, local_files_only=True, trust_remote_code=True, torch_dtype=dtype
+                )
+                .to(device)
+                .eval()
+            )
             tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=True)
             _runtime = self._runtime = (model, tokenizer)
             self._available, self._load_error = True, None
@@ -140,7 +144,17 @@ def _prompt(request: dict[str, Any], mode: str) -> str:
     else:
         instruction = (
             'Return JSON only: {"decisions":[{"field_name":str,"candidate_id":str,"reason_code":str}]}. '
-            "Choose only supplied candidate_id and field_name. If evidence is insufficient, omit the field."
+            "Choose only supplied candidate_id and field_name. If evidence is insufficient, omit the field. "
+            "Selection rules: transaction_amount means final net payable or amount due after tax and adjustments; "
+            "prefer explicit Grand Total, Total Amount, Total Bayar, Amount Due, Net Payable, or Balance Due evidence. "
+            "Never choose subtotal, unit price, DPP/tax base, discount, PPN/VAT/tax, paid amount, change, or tax rate. "
+            "When no explicit final-total label exists and candidates use the same currency, prefer the largest "
+            "currency-marked amount because tax normally increases the payable total. "
+            "document_number means the identifier adjacent to Invoice/Faktur/Nota/Receipt No or Number; never choose "
+            "a date, tax ID, NPWP, customer ID, purchase order, delivery number, or page number. "
+            "transaction_date means the invoice/receipt issue or transaction date; prefer Invoice Date, Tanggal Nota, "
+            "Tanggal Faktur, Transaction Date, or Issued Date and reject due date, payment date, print date, "
+            "and tax period."
         )
     return f"{instruction}\nUNTRUSTED_DATA_JSON:\n" + json.dumps(request, ensure_ascii=False, separators=(",", ":"))
 

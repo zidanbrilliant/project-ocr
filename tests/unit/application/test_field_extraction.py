@@ -121,3 +121,36 @@ def test_does_not_pair_adjacent_blocks_without_geometry() -> None:
     )
 
     assert "vendor_name" not in fields
+
+
+def test_uses_largest_currency_amount_when_total_label_is_missing() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Harga Barang Rp 900.000\nPPN Rp 99.000\nRp 999.000"}
+    )
+
+    assert fields["transaction_amount"]["value"] == 999_000.0
+    assert fields["transaction_amount"]["currency"] == "IDR"
+    assert fields["transaction_amount"]["extraction_method"] == "currency_largest_fallback"
+
+
+def test_supports_usd_total_fallback() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Unit Price USD 100.00\nTax USD 11.00\nUSD 111.00"})
+
+    assert fields["transaction_amount"]["value"] == 111.0
+    assert fields["transaction_amount"]["currency"] == "USD"
+
+
+def test_extracts_issue_date_inside_text_and_rejects_due_date() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Invoice Date: Jakarta, 20 Juli 2026 14:30\nDue Date: 20/08/2026"}
+    )
+
+    assert fields["transaction_date"]["value"] == "2026-07-20"
+    assert "Invoice Date" in fields["transaction_date"]["source_text"]
+
+
+def test_extracts_numeric_receipt_number_and_short_dot_date() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "No Nota: 00012345\nTanggal Nota: 21.07.26"})
+
+    assert fields["document_number"]["value"] == "00012345"
+    assert fields["transaction_date"]["value"] == "2026-07-21"

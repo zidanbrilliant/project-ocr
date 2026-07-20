@@ -29,7 +29,7 @@ class _Adapter:
 
 def test_reasoning_can_only_select_existing_candidate(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
-    fields = {"transaction_amount": {"value": 100.0, "status": "AMBIGUOUS", "confidence": 0.5}}
+    fields = {"transaction_amount": {"value": 100.0, "status": "FOUND", "confidence": 0.99}}
     candidates = {
         "transaction_amount": [
             {"value": 100.0, "confidence": 0.9, "source_text": "DPP: 100"},
@@ -47,7 +47,9 @@ def test_reasoning_can_only_select_existing_candidate(monkeypatch) -> None:
 def test_summary_accepts_only_known_rule_ids(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     service = FieldReasoningService(_Adapter())
-    summary = asyncio.run(service.summarize("NG", {}, [{"rule_id": "INV-R009", "rule_name": "Amount must match PV amount"}]))
+    summary = asyncio.run(
+        service.summarize("NG", {}, [{"rule_id": "INV-R009", "rule_name": "Amount must match PV amount"}])
+    )
 
     assert summary["engine"] == "qwen3.5-9b"
     assert summary["result"] == "NG"
