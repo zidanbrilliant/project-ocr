@@ -53,3 +53,20 @@ def test_summary_accepts_only_known_rule_ids(monkeypatch) -> None:
 
     assert summary["engine"] == "qwen3.5-9b"
     assert summary["result"] == "NG"
+
+
+def test_reasoning_never_receives_due_date_candidates(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    fields = {"transaction_date": {"value": None, "status": "NOT_FOUND", "confidence": 0.0}}
+    candidates = {
+        "transaction_date": [
+            {"value": "2026-08-20", "confidence": 0.25, "source_text": "Due Date", "date_role": "due_date"},
+            {"value": "2026-08-25", "confidence": 0.25, "source_text": "Due Date", "date_role": "due_date"},
+        ]
+    }
+
+    resolved, audit = asyncio.run(FieldReasoningService(_Adapter()).resolve(fields, candidates, "INV"))
+
+    assert resolved == fields
+    assert audit["used"] is False
+    assert audit["engine"] == "deterministic"

@@ -23,6 +23,18 @@ _REASON_CODES = {
     "vendor_name": {"SELLER_OR_ISSUER"},
 }
 _CORE_SELECTION_FIELDS = {"document_number", "transaction_amount", "transaction_date"}
+_NON_PAYABLE_ROLES = {
+    "subtotal",
+    "discount",
+    "tax_base",
+    "tax",
+    "service_charge",
+    "shipping",
+    "withholding_tax",
+    "rounding",
+    "paid",
+}
+_NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period"}
 
 
 class FieldReasoningService:
@@ -62,10 +74,20 @@ class FieldReasoningService:
         candidate_index: dict[str, dict[str, dict[str, Any]]] = {}
         payload_fields: dict[str, list[dict[str, Any]]] = {}
         for name, items in selected.items():
+            eligible_items = [
+                item
+                for item in items
+                if not (
+                    name == "transaction_amount" and item.get("amount_role") in _NON_PAYABLE_ROLES
+                )
+                and not (name == "transaction_date" and item.get("date_role") in _NON_ISSUE_DATE_ROLES)
+            ]
+            if len({str(item.get("value")) for item in eligible_items}) < 2:
+                continue
             indexed: dict[str, dict[str, Any]] = {}
             public_items: list[dict[str, Any]] = []
             for index, item in enumerate(
-                sorted(items, key=lambda item: item.get("score", item["confidence"]), reverse=True)[:8]
+                sorted(eligible_items, key=lambda item: item.get("score", item["confidence"]), reverse=True)[:8]
             ):
                 candidate_id = f"{name}-{index}"
                 indexed[candidate_id] = item
@@ -86,6 +108,9 @@ class FieldReasoningService:
                 )
             candidate_index[name] = indexed
             payload_fields[name] = public_items
+
+        if not payload_fields:
+            return fields, {"enabled": True, "used": False, "engine": "deterministic"}
 
         reply = await self._adapter.select(
             {

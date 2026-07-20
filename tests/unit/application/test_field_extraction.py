@@ -154,3 +154,65 @@ def test_extracts_numeric_receipt_number_and_short_dot_date() -> None:
 
     assert fields["document_number"]["value"] == "00012345"
     assert fields["transaction_date"]["value"] == "2026-07-21"
+
+
+def test_rebuilds_native_pdf_words_into_invoice_rows() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {
+            "tokens_json": [
+                {"text": "Invoice", "bbox": [10, 10, 45, 20], "coordinate_space": "pdf_points"},
+                {"text": "No.", "bbox": [48, 10, 63, 20], "coordinate_space": "pdf_points"},
+                {"text": "INV-2026-77", "bbox": [66, 10, 120, 20], "coordinate_space": "pdf_points"},
+                {"text": "Invoice", "bbox": [10, 30, 45, 40], "coordinate_space": "pdf_points"},
+                {"text": "Date:", "bbox": [48, 30, 75, 40], "coordinate_space": "pdf_points"},
+                {"text": "20/07/2026", "bbox": [78, 30, 130, 40], "coordinate_space": "pdf_points"},
+                {"text": "Grand", "bbox": [10, 50, 40, 60], "coordinate_space": "pdf_points"},
+                {"text": "Total:", "bbox": [43, 50, 72, 60], "coordinate_space": "pdf_points"},
+                {"text": "Rp", "bbox": [75, 50, 85, 60], "coordinate_space": "pdf_points"},
+                {"text": "1.110.000", "bbox": [88, 50, 135, 60], "coordinate_space": "pdf_points"},
+            ]
+        }
+    )
+
+    assert fields["document_number"]["value"] == "INV-2026-77"
+    assert fields["transaction_date"]["value"] == "2026-07-20"
+    assert fields["transaction_amount"]["value"] == 1_110_000.0
+    assert fields["transaction_amount"]["source_block_id"] == "pdf-row-3"
+
+
+def test_reconciles_discount_tax_and_service_charge() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {
+            "raw_text": """Subtotal: Rp 1.000.000
+Discount: Rp 100.000
+PPN: Rp 99.000
+Service Charge: Rp 1.000
+Grand Total: Rp 1.000.000"""
+        }
+    )
+
+    assert fields["transaction_amount"]["value"] == 1_000_000.0
+    assert fields["transaction_amount"]["validation"] == "RECONCILED_NET_TOTAL"
+
+
+def test_does_not_fill_issue_date_with_due_date() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Due Date: 20/08/2026"})
+
+    assert fields["transaction_date"]["value"] is None
+    assert fields["transaction_date"]["status"] == "NOT_FOUND"
+
+
+def test_does_not_fill_total_with_an_adjustment() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Service Charge: Rp 10.000"})
+
+    assert fields["transaction_amount"]["value"] is None
+    assert fields["transaction_amount"]["status"] == "NOT_FOUND"
+
+
+def test_requests_visual_ocr_only_when_native_labeled_field_is_unresolved() -> None:
+    service = FieldExtractionService()
+
+    assert not service.needs_visual_ocr(
+        {"raw_text": "Invoice No: INV-7\nInvoice Date: 20/07/2026\nGrand Total: Rp 1.000.000"}
+    )
+    assert service.needs_visual_ocr({"raw_text": "Grand Total:"})

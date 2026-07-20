@@ -261,7 +261,9 @@ class AIPipelineOrchestrator:
                         "barcodes": p.barcodes,
                         "extracted_fields": p.extracted_fields,
                         "document_quality": p.quality_metrics or {},
-                        "ai_note": "Page completed." if not p.errors else p.errors[0].get("error", "Page processing failed."),
+                        "ai_note": (
+                            "Page completed." if not p.errors else p.errors[0].get("error", "Page processing failed.")
+                        ),
                         "errors": p.errors,
                     }
                     for p in dr.pages
@@ -281,7 +283,9 @@ class AIPipelineOrchestrator:
                 "ai_confidence": folder_confidence,
                 "ai_confidence_level": ConfidenceScore.level(folder_confidence),
                 "confidence_threshold": settings.CONFIDENCE_THRESHOLD,
-                "ai_note": f"{ok_count} OK, {ng_count} NG document(s); folder confidence uses the lowest document score.",
+                "ai_note": (
+                    f"{ok_count} OK, {ng_count} NG document(s); folder confidence uses the lowest document score."
+                ),
             }
         )
 
@@ -373,7 +377,10 @@ class AIPipelineOrchestrator:
                 raw_detections.extend(batch_detections)
 
                 async def process_one_page(
-                    image: bytes, local_index: int, batch_offset: int = page_offset
+                    image: bytes,
+                    local_index: int,
+                    batch_offset: int = page_offset,
+                    page_detections: list[dict[str, Any]] = batch_detections,
                 ) -> tuple[dict, dict]:
                     page_index = batch_offset + local_index
                     native = native_pages[page_index] if page_index < len(native_pages) else None
@@ -386,14 +393,25 @@ class AIPipelineOrchestrator:
                                 "average_confidence": None,
                                 "text_layer_detected": True,
                             }
+                            needs_visual_ocr = getattr(self._field_extractor, "needs_visual_ocr", None)
+                            if callable(needs_visual_ocr) and needs_visual_ocr(native, doc.document_type):
+                                visual_ocr = await self._ocr_engine.run(image, extension=_page_ocr_extension(ext))
+                                if (visual_ocr.get("raw_text") or "").strip():
+                                    visual_ocr["engine_name"] = "pymupdf+" + visual_ocr.get("engine_name", "nemotron")
+                                    visual_ocr["raw_text"] = f"{ocr['raw_text']}\n{visual_ocr['raw_text']}"
+                                    visual_ocr["tokens_json"] = ocr["tokens_json"] + (
+                                        visual_ocr.get("tokens_json", []) or []
+                                    )
+                                    ocr = visual_ocr
                         else:
                             ocr = await self._ocr_engine.run(image, extension=_page_ocr_extension(ext))
                         barcode = await self._barcode_chain.read(
                             image,
                             [
                                 detection
-                                for detection in batch_detections
-                                if detection.get("page_number") == local_index + 1 and detection.get("object_type") == "barcode"
+                                for detection in page_detections
+                                if detection.get("page_number") == local_index + 1
+                                and detection.get("object_type") == "barcode"
                             ],
                         )
                     return ocr, barcode
@@ -438,7 +456,8 @@ class AIPipelineOrchestrator:
 
             result.pages = page_results_list
             result.quality_metrics = {
-                "is_colored": bool(result.pages) and all(bool(page.quality_metrics and page.quality_metrics.get("is_colored")) for page in result.pages),
+                "is_colored": bool(result.pages)
+                and all(bool(page.quality_metrics and page.quality_metrics.get("is_colored")) for page in result.pages),
                 "pages": [page.quality_metrics for page in result.pages],
             }
 

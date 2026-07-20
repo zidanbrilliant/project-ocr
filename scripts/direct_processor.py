@@ -140,18 +140,33 @@ class DirectProcessor:
                 p_img = page_images[i] if i < len(page_images) else b""
                 pp_img = preprocessed[i] if i < len(preprocessed) else None
                 native = native_pages[i] if i < len(native_pages) else None
-                if native and native.get("text_layer_usable"):
-                    ocr_task = asyncio.sleep(
-                        0,
-                        result={
-                            "engine_name": "pymupdf",
-                            "raw_text": native["raw_text"],
-                            "tokens_json": native["tokens_json"],
-                            "average_confidence": None,
-                        },
-                    )
-                else:
-                    ocr_task = self._ocr.run(p_img, extension=ocr_ext)
+
+                async def read_page_ocr(
+                    native_page: dict[str, Any] | None = native,
+                    image: bytes = p_img,
+                    extension: str = ocr_ext,
+                    document_type: str = doc_type,
+                ) -> dict[str, Any]:
+                    if not native_page or not native_page.get("text_layer_usable"):
+                        return await self._ocr.run(image, extension=extension)
+                    native_ocr = {
+                        "engine_name": "pymupdf",
+                        "raw_text": native_page["raw_text"],
+                        "tokens_json": native_page["tokens_json"],
+                        "average_confidence": None,
+                    }
+                    needs_visual_ocr = getattr(self._field_extractor, "needs_visual_ocr", None)
+                    if not callable(needs_visual_ocr) or not needs_visual_ocr(native_page, document_type):
+                        return native_ocr
+                    visual_ocr = await self._ocr.run(image, extension=extension)
+                    if not (visual_ocr.get("raw_text") or "").strip():
+                        return native_ocr
+                    visual_ocr["engine_name"] = "pymupdf+" + visual_ocr.get("engine_name", "nemotron")
+                    visual_ocr["raw_text"] = f"{native_ocr['raw_text']}\n{visual_ocr['raw_text']}"
+                    visual_ocr["tokens_json"] = native_ocr["tokens_json"] + (visual_ocr.get("tokens_json", []) or [])
+                    return visual_ocr
+
+                ocr_task = read_page_ocr()
                 bc_task = self._barcode_chain.read(pp_img or p_img)
                 page_ocr, page_bc = await asyncio.gather(ocr_task, bc_task)
                 if not (page_ocr.get("raw_text") or "").strip() and pp_img and pp_img != p_img:

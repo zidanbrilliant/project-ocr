@@ -45,6 +45,71 @@ _MONTHS = {
     "desember": "December",
 }
 
+_AMOUNT_ROLES: tuple[tuple[str, tuple[str, ...], float], ...] = (
+    (
+        "final_total",
+        (
+            "grand total",
+            "invoice total",
+            "total bayar",
+            "jumlah bayar",
+            "amount due",
+            "balance due",
+            "net payable",
+            "total due",
+            "nilai tagihan",
+            "jumlah tagihan",
+            "total amount",
+            "net amount",
+            "total",
+        ),
+        0.98,
+    ),
+    ("subtotal", ("jumlah harga jual", "subtotal", "sub total", "amount before tax"), 0.45),
+    ("discount", ("dikurangi potongan harga", "potongan harga", "discount"), 0.35),
+    ("tax_base", ("dasar pengenaan pajak", "taxable amount", "tax base", "dpp"), 0.25),
+    ("tax", ("ppn", "vat", "tax", "pajak"), 0.2),
+    ("service_charge", ("service charge", "biaya layanan", "handling fee", "admin fee", "administration fee"), 0.3),
+    ("shipping", ("shipping", "freight", "ongkir", "delivery fee"), 0.3),
+    ("withholding_tax", ("withholding tax", "pph", "pajak penghasilan"), 0.25),
+    ("rounding", ("rounding", "pembulatan"), 0.2),
+    ("paid", ("amount paid", "paid amount", "jumlah dibayar", "tunai", "cash received", "change"), 0.1),
+)
+
+_NON_PAYABLE_ROLES = {
+    "subtotal",
+    "discount",
+    "tax_base",
+    "tax",
+    "service_charge",
+    "shipping",
+    "withholding_tax",
+    "rounding",
+    "paid",
+}
+_NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period"}
+
+
+def _valid_bbox(value: Any) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and all(isinstance(item, (int, float)) for item in value)
+    )
+
+
+def _bbox_center(value: list[float] | tuple[float, ...]) -> tuple[float, float]:
+    return ((float(value[0]) + float(value[2])) / 2, (float(value[1]) + float(value[3])) / 2)
+
+
+def _union_bbox(boxes: list[Any]) -> list[float]:
+    return [
+        min(float(box[0]) for box in boxes),
+        min(float(box[1]) for box in boxes),
+        max(float(box[2]) for box in boxes),
+        max(float(box[3]) for box in boxes),
+    ]
+
 # Order matters: the first matching amount label is the intended business role.
 _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
     "document_number": (
@@ -148,14 +213,21 @@ class FieldExtractionService:
         taxes = [dict(item) for item in amounts if item.get("amount_role") == "tax"]
         discounts = [dict(item) for item in amounts if item.get("amount_role") == "discount"]
         subtotal = best("subtotal")
-        expected = None
-        if tax_base and taxes:
-            expected = float(tax_base["value"]) + sum(float(item["value"]) for item in taxes)
+        charges = [
+            dict(item)
+            for item in amounts
+            if item.get("amount_role") in {"service_charge", "shipping", "withholding_tax", "rounding"}
+        ]
         reconciliation = "NOT_APPLICABLE"
-        if final_total and expected is not None:
-            reconciliation = (
-                "RECONCILED_DPP_PLUS_TAX" if abs(float(final_total["value"]) - expected) < 0.01 else "UNRECONCILED"
-            )
+        if final_total:
+            expected, reconciled_as = self._expected_payable(amounts, final_total.get("currency", "IDR"))
+            if expected is not None:
+                reconciliation = (
+                    reconciled_as
+                    if abs(float(final_total["value"]) - expected)
+                    <= self._money_tolerance(final_total.get("currency", "IDR"))
+                    else "UNRECONCILED"
+                )
         return {
             "currency": (final_total or tax_base or subtotal or {}).get("currency", "UNKNOWN"),
             "final_total": final_total,
@@ -163,6 +235,7 @@ class FieldExtractionService:
             "discounts": discounts,
             "taxable_base": tax_base,
             "taxes": taxes,
+            "adjustments": charges,
             "reconciliation": reconciliation,
         }
 
@@ -172,17 +245,29 @@ class FieldExtractionService:
     def extract_layout_aware(self, tokens: list[dict[str, Any]], doc_type: str | None = None) -> dict[str, Any]:
         return self.extract_from_ocr({"tokens_json": tokens}, doc_type)
 
+    def needs_visual_ocr(self, page: dict[str, Any], doc_type: str | None = None) -> bool:
+        """Use visual OCR only when native text contains an unresolved core-field label."""
+        token_text = [str(token.get("text", "")) for token in page.get("tokens_json", []) or []]
+        text = "\n".join([str(page.get("raw_text", "")), *token_text])
+        normalized = self._normal(text)
+        fields = self.extract_from_ocr(page, doc_type)
+
+        def unresolved(name: str) -> bool:
+            return fields.get(name, {}).get("status") != "FOUND"
+
+        has_document_label = any(label in normalized for label, score in _LABELS["document_number"] if score >= 0.9)
+        has_total_label = any(label in normalized for label, _ in _LABELS["transaction_amount"])
+        has_date_label = any(label in normalized for label, _ in _LABELS["transaction_date"])
+        return (
+            (has_document_label and unresolved("document_number"))
+            or (has_total_label and unresolved("transaction_amount"))
+            or (has_date_label and unresolved("transaction_date"))
+        )
+
     def _candidates(self, page: dict[str, Any], doc_type: str | None) -> dict[str, list[dict[str, Any]]]:
         candidates: dict[str, list[dict[str, Any]]] = {}
         tokens = page.get("tokens_json", []) or []
-        lines: list[tuple[str, Any, str]] = []
-        for token_index, token in enumerate(tokens):
-            block_id = str(token.get("block_id") or f"b{token_index + 1}")
-            lines.extend(
-                (line.strip(), token.get("bbox"), block_id)
-                for line in str(token.get("text", "")).splitlines()
-                if line.strip()
-            )
+        lines = self._lines_from_tokens(tokens)
         if not lines:
             raw_text = page.get("raw_text", "") or ""
             lines = [
@@ -195,7 +280,7 @@ class FieldExtractionService:
             label, value = self._split_label_value(line)
             if label and value:
                 self._add_labeled(candidates, label, value, bbox, "label_value", doc_type, block_id)
-            self._add_document_number(candidates, line, bbox, block_id)
+            self._add_document_number(candidates, line, bbox, block_id, doc_type)
             self._add_financial_row(candidates, line, bbox, block_id)
             self._add_date_candidate(candidates, line, bbox, block_id, line_index, len(lines))
 
@@ -222,6 +307,7 @@ class FieldExtractionService:
             currency_candidates = [
                 (value, raw_value, currency, line, bbox, block_id, line_index)
                 for line_index, (line, bbox, block_id) in enumerate(lines)
+                if self._financial_role(line) is None
                 for value, raw_value, currency in self._currency_amounts(line)
             ]
             currencies = {item[2] for item in currency_candidates}
@@ -243,16 +329,66 @@ class FieldExtractionService:
                 )
         return candidates
 
+    @staticmethod
+    def _lines_from_tokens(tokens: list[dict[str, Any]]) -> list[tuple[str, Any, str]]:
+        """Rebuild native PDF words into rows; Nemotron blocks are already semantic rows."""
+        if not tokens:
+            return []
+        native = all(
+            token.get("coordinate_space") == "pdf_points" and _valid_bbox(token.get("bbox")) for token in tokens
+        )
+        if not native:
+            lines: list[tuple[str, Any, str]] = []
+            for token_index, token in enumerate(tokens):
+                block_id = str(token.get("block_id") or f"b{token_index + 1}")
+                lines.extend(
+                    (line.strip(), token.get("bbox"), block_id)
+                    for line in str(token.get("text", "")).splitlines()
+                    if line.strip()
+                )
+            return lines
+
+        rows: list[list[dict[str, Any]]] = []
+        for token in sorted(tokens, key=lambda item: ((_bbox_center(item["bbox"])[1]), float(item["bbox"][0]))):
+            center_y = _bbox_center(token["bbox"])[1]
+            height = float(token["bbox"][3]) - float(token["bbox"][1])
+            for row in rows:
+                row_box = _union_bbox([item["bbox"] for item in row])
+                row_center_y = _bbox_center(row_box)[1]
+                row_height = float(row_box[3]) - float(row_box[1])
+                if abs(center_y - row_center_y) <= max(2.0, max(height, row_height) * 0.6):
+                    row.append(token)
+                    break
+            else:
+                rows.append([token])
+
+        lines = []
+        for row_index, row in enumerate(rows, start=1):
+            ordered = sorted(row, key=lambda item: float(item["bbox"][0]))
+            text = " ".join(str(item.get("text", "")).strip() for item in ordered).strip()
+            lines.append((text, _union_bbox([item["bbox"] for item in ordered]), f"pdf-row-{row_index}"))
+        return [line for line in lines if line[0]]
+
     def _add_document_number(
-        self, candidates: dict[str, list[dict[str, Any]]], line: str, bbox: Any, block_id: str
+        self, candidates: dict[str, list[dict[str, Any]]], line: str, bbox: Any, block_id: str, doc_type: str | None
     ) -> None:
+        normalized = self._normal(line)
+        if ("tax invoice" in normalized or "faktur pajak" in normalized) and (doc_type or "").upper() not in {
+            "TAX_INVOICE",
+            "FAKTUR_PAJAK",
+        }:
+            return
         match = (
             re.search(
                 r"(?i)\b(?:invoice|inv|faktur(?:\s+penjualan)?|nota|receipt|bill|document|doc)\b\s*[:#\-]?\s*(?:no\.?|number|nomor|#)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
                 line,
             )
             or re.search(
-                r"(?i)\b(?:invoice|faktur(?:\s+penjualan)?)\s*[:#\-]\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
+                r"(?i)\b(?:invoice|inv|faktur(?:\s+penjualan)?|nota|receipt|bill|document|doc)\s*[:#\-]\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
+                line,
+            )
+            or re.search(
+                r"(?i)\b(?:no\.?|number|nomor)\s*(?:invoice|inv|faktur|nota|receipt|bill)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
                 line,
             )
             or re.search(r"(?i)\b((?:INV|FAK)[\s/\-]*[0-9][A-Z0-9/.\-]*)", line)
@@ -274,55 +410,37 @@ class FieldExtractionService:
     def _add_financial_row(
         self, candidates: dict[str, list[dict[str, Any]]], line: str, bbox: Any, block_id: str
     ) -> None:
-        normalized = self._normal(line)
-        roles = (
-            (
-                "final_total",
-                (
-                    "grand total",
-                    "invoice total",
-                    "total bayar",
-                    "jumlah bayar",
-                    "amount due",
-                    "balance due",
-                    "net payable",
-                    "total due",
-                    "nilai tagihan",
-                    "jumlah tagihan",
-                    "total amount",
-                    "net amount",
-                    "total",
-                ),
-                0.98,
-            ),
-            ("subtotal", ("jumlah harga jual", "subtotal", "sub total", "amount before tax"), 0.45),
-            ("discount", ("dikurangi potongan harga", "potongan harga", "discount"), 0.35),
-            ("tax_base", ("dasar pengenaan pajak", "taxable amount", "tax base", "dpp"), 0.25),
-            ("tax", ("ppn", "vat", "tax", "pajak"), 0.2),
-        )
-        for role, labels, score in roles:
-            label = next((item for item in labels if normalized == item or normalized.startswith(f"{item} ")), None)
-            if label is None:
-                continue
-            value = self._rightmost_money(line)
-            if value is not None:
-                raw_value = list(_MONEY_RE.finditer(line))[-1].group(1)
-                currency = self._currency(line) or "IDR"
-                self._add(
-                    candidates,
-                    "transaction_amount",
-                    value,
-                    score,
-                    bbox,
-                    "financial_row",
-                    line,
-                    source_label=label,
-                    raw_value=raw_value,
-                    source_block_id=block_id,
-                    amount_role=role,
-                    currency=currency,
-                )
+        role_data = self._financial_role(line)
+        if role_data is None:
             return
+        role, label, score = role_data
+        value = self._rightmost_money(line)
+        if value is None:
+            return
+        raw_value = list(_MONEY_RE.finditer(line))[-1].group(1)
+        currency = self._currency(line) or "IDR"
+        self._add(
+            candidates,
+            "transaction_amount",
+            value,
+            score,
+            bbox,
+            "financial_row",
+            line,
+            source_label=label,
+            raw_value=raw_value,
+            source_block_id=block_id,
+            amount_role=role,
+            currency=currency,
+        )
+
+    def _financial_role(self, line: str) -> tuple[str, str, float] | None:
+        normalized = self._normal(line)
+        for role, labels, score in _AMOUNT_ROLES:
+            label = next((item for item in labels if normalized == item or normalized.startswith(f"{item} ")), None)
+            if label is not None:
+                return role, label, score
+        return None
 
     def _add_date_candidate(
         self,
@@ -338,7 +456,11 @@ class FieldExtractionService:
             return
         normalized = self._normal(line)
         if any(label in normalized for label in ("due date", "jatuh tempo", "payment date", "tanggal bayar")):
-            score = 0.25
+            score, role = 0.25, "due_date"
+        elif any(label in normalized for label in ("print date", "printed", "tanggal cetak")):
+            score, role = 0.2, "print_date"
+        elif any(label in normalized for label in ("tax period", "masa pajak", "periode pajak")):
+            score, role = 0.2, "tax_period"
         elif any(
             label in normalized
             for label in (
@@ -351,9 +473,9 @@ class FieldExtractionService:
                 "issued date",
             )
         ):
-            score = 0.9
+            score, role = 0.9, "issue_date"
         else:
-            score = 0.45
+            score, role = 0.45, "unlabelled"
         self._add(
             candidates,
             "transaction_date",
@@ -364,6 +486,7 @@ class FieldExtractionService:
             line,
             source_block_id=block_id,
             source_position=round((line_index + 1) / max(line_count, 1), 4),
+            date_role=role,
         )
 
     def _add_labeled(
@@ -450,6 +573,15 @@ class FieldExtractionService:
     def _resolve(self, name: str, items: list[dict[str, Any]]) -> dict[str, Any]:
         if name == "transaction_amount":
             items = self._validate_amount_candidates(items)
+            eligible = [item for item in items if item.get("amount_role") not in _NON_PAYABLE_ROLES]
+            if not eligible:
+                return self._not_found(items)
+            items = eligible
+        elif name == "transaction_date":
+            eligible = [item for item in items if item.get("date_role") not in _NON_ISSUE_DATE_ROLES]
+            if not eligible:
+                return self._not_found(items)
+            items = eligible
         items = sorted(items, key=lambda item: float(item["score"]), reverse=True)
         winner = dict(items[0])
         runner_up = items[1] if len(items) > 1 else None
@@ -467,21 +599,71 @@ class FieldExtractionService:
         return winner
 
     @staticmethod
+    def _not_found(items: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "value": None,
+            "raw_value": None,
+            "confidence": 0.0,
+            "score": 0.0,
+            "status": "NOT_FOUND",
+            "candidate_count": len(items),
+            "alternatives": [
+                {"value": item.get("value"), "score": item.get("score"), "source_text": item.get("source_text")}
+                for item in items[:3]
+            ],
+        }
+
+    @staticmethod
     def _validate_amount_candidates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         checked = [dict(item) for item in items]
         final_totals = [item for item in checked if item.get("amount_role") == "final_total"]
-        tax_bases = [item for item in checked if item.get("amount_role") == "tax_base"]
-        taxes = [item for item in checked if item.get("amount_role") == "tax"]
         for item in final_totals:
             item["score"] = max(float(item["score"]), 0.98)
             item["confidence"] = item["score"]
             item["validation"] = "LABELLED_FINAL_TOTAL"
-            if tax_bases and taxes:
-                expected = float(tax_bases[-1]["value"]) + sum(float(tax["value"]) for tax in taxes)
-                if abs(float(item["value"]) - expected) < 0.01:
-                    item["score"] = item["confidence"] = 0.995
-                    item["validation"] = "RECONCILED_DPP_PLUS_TAX"
+            expected, validation = FieldExtractionService._expected_payable(checked, item.get("currency", "IDR"))
+            if expected is not None and abs(float(item["value"]) - expected) <= FieldExtractionService._money_tolerance(
+                item.get("currency", "IDR")
+            ):
+                item["score"] = item["confidence"] = 0.995
+                item["validation"] = validation
         return checked
+
+    @staticmethod
+    def _expected_payable(items: list[dict[str, Any]], currency: str) -> tuple[float | None, str]:
+        def values(role: str) -> list[float]:
+            seen: set[tuple[float, str]] = set()
+            result: list[float] = []
+            for item in items:
+                if item.get("amount_role") != role or item.get("currency", "IDR") != currency:
+                    continue
+                key = (float(item["value"]), str(item.get("source_text", "")))
+                if key not in seen:
+                    seen.add(key)
+                    result.append(key[0])
+            return result
+
+        taxes = values("tax")
+        tax_bases = values("tax_base")
+        if tax_bases and taxes:
+            return tax_bases[-1] + sum(taxes), "RECONCILED_DPP_PLUS_TAX"
+        subtotals = values("subtotal")
+        if not subtotals:
+            return None, "NOT_APPLICABLE"
+        return (
+            subtotals[-1]
+            - sum(values("discount"))
+            + sum(taxes)
+            + sum(values("service_charge"))
+            + sum(values("shipping"))
+            - sum(values("withholding_tax"))
+            + sum(values("rounding")),
+            "RECONCILED_NET_TOTAL",
+        )
+
+    @staticmethod
+    def _money_tolerance(currency: str) -> float:
+        return 1.0 if currency in {"IDR", "JPY"} else 0.01
 
     @staticmethod
     def _split_label_value(line: str) -> tuple[str | None, str | None]:
