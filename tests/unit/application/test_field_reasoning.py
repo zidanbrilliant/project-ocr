@@ -211,3 +211,26 @@ def test_reasoning_can_select_a_raw_identifier_candidate(monkeypatch) -> None:
 
     assert resolved["document_number"]["value"] == "RI-23014073"
     assert audit["resolved_fields"] == ["document_number"]
+
+
+def test_reasoning_deduplicates_values_before_selecting_candidates(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class UniqueAdapter(_Adapter):
+        async def select(self, request):
+            values = [item["value"] for item in request["candidates"]["transaction_amount"]]
+            assert values == [110.0, 100.0]
+            return {"decisions": []}
+
+    fields = {"transaction_amount": {"value": None, "status": "NOT_FOUND", "confidence": 0.0}}
+    candidates = {
+        "transaction_amount": [
+            {"value": 110.0, "confidence": 0.8, "score": 0.8, "source_text": "Total: 110"},
+            {"value": 110.0, "confidence": 0.7, "score": 0.7, "source_text": "duplicate 110"},
+            {"value": 100.0, "confidence": 0.6, "score": 0.6, "source_text": "Subtotal: 100"},
+        ]
+    }
+
+    _, audit = asyncio.run(FieldReasoningService(UniqueAdapter()).resolve(fields, candidates, "INV"))
+
+    assert audit["engine"] == "qwen3.5-9b"

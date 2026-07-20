@@ -80,6 +80,13 @@ class FieldReasoningService:
         }
         if not settings.REASONING_ENABLED or not selected:
             return fields, {"enabled": settings.REASONING_ENABLED, "used": False, "engine": "deterministic"}
+        if not self._adapter.is_available:
+            return fields, {
+                "enabled": True,
+                "used": False,
+                "engine": "deterministic",
+                "error": self._adapter.load_error or "reasoning_not_ready",
+            }
 
         candidate_index: dict[str, dict[str, dict[str, Any]]] = {}
         payload_fields: dict[str, list[dict[str, Any]]] = {}
@@ -97,10 +104,19 @@ class FieldReasoningService:
                 and name not in _CORE_SELECTION_FIELDS
             ):
                 continue
+            # One value can be discovered by several OCR paths.  Give the model
+            # distinct values, not twelve copies of the same noisy candidate.
+            unique_items: dict[str, dict[str, Any]] = {}
+            for item in eligible_items:
+                key = str(item.get("value"))
+                if key not in unique_items or float(item.get("score", item["confidence"])) > float(
+                    unique_items[key].get("score", unique_items[key]["confidence"])
+                ):
+                    unique_items[key] = item
             indexed: dict[str, dict[str, Any]] = {}
             public_items: list[dict[str, Any]] = []
             for index, item in enumerate(
-                sorted(eligible_items, key=lambda item: item.get("score", item["confidence"]), reverse=True)[:12]
+                sorted(unique_items.values(), key=lambda item: item.get("score", item["confidence"]), reverse=True)[:12]
             ):
                 candidate_id = f"{name}-{index}"
                 indexed[candidate_id] = item

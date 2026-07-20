@@ -123,6 +123,23 @@ def test_does_not_pair_adjacent_blocks_without_geometry() -> None:
     assert "vendor_name" not in fields
 
 
+def test_does_not_pair_invoice_label_with_a_different_table_column() -> None:
+    candidates = FieldExtractionService().collect_document_candidates(
+        [
+            {
+                "tokens_json": [
+                    {"text": "Invoice Number", "bbox": [10, 10, 110, 30]},
+                    {"text": "RI - 23014073", "bbox": [500, 50, 650, 70]},
+                ]
+            }
+        ]
+    )
+
+    assert not any(
+        item["extraction_method"] == "context_label_value" for item in candidates.get("document_number", [])
+    )
+
+
 def test_defers_unlabelled_currency_amounts_to_reasoning_when_total_label_is_missing() -> None:
     service = FieldExtractionService()
     candidates = service.collect_document_candidates(
@@ -215,18 +232,15 @@ def test_extracts_spaced_invoice_id_without_colon() -> None:
     assert fields["document_number"]["value"] == "RI/2301-A77"
 
 
-def test_recovers_invoice_number_and_total_split_across_three_ocr_lines() -> None:
+def test_recovers_invoice_number_and_total_split_across_adjacent_ocr_lines() -> None:
     service = FieldExtractionService()
     candidates = service.collect_document_candidates(
         [
         {
             "raw_text": """Invoice Serial Number
-RI
--
-23014073
+RI - 23014073
 Grand Amount
-USD
-1,240.50"""
+USD 1,240.50"""
         }
         ]
     )
@@ -264,16 +278,13 @@ def test_harvests_invoice_and_balance_due_values_before_their_labels() -> None:
     assert total["candidate_only"] and total["label_relation"] == "before_label"
 
 
-def test_harvests_unlabelled_identifier_for_qwen_without_resolving_it_deterministically() -> None:
+def test_does_not_harvest_unanchored_identifier_for_qwen() -> None:
     service = FieldExtractionService()
     candidates = service.collect_document_candidates([{"raw_text": "RI - 23014073\nSupplier copy"}])
     fields = service.resolve_document_candidates(candidates)
 
-    assert fields["document_number"]["status"] == "NOT_FOUND"
-    assert any(
-        item["value"] == "RI-23014073" and item["candidate_only"]
-        for item in candidates["document_number"]
-    )
+    assert "document_number" not in candidates
+    assert "document_number" not in fields
 
 
 def test_generic_total_does_not_create_a_context_label_candidate() -> None:
@@ -289,6 +300,12 @@ def test_total_tax_is_not_misclassified_as_final_total() -> None:
 
     assert fields["transaction_amount"]["value"] == 1_110_000.0
     assert fields["transaction_amount"]["amount_role"] == "final_total"
+
+
+def test_total_price_is_not_misclassified_as_final_total() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Total Price: USD 500.00"})
+
+    assert fields["transaction_amount"]["status"] == "NOT_FOUND"
 
 
 def test_total_amount_ignores_percent_after_currency_value() -> None:

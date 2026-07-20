@@ -394,7 +394,6 @@ class FieldExtractionService:
             if label and value:
                 self._add_labeled(candidates, label, value, bbox, "label_value", doc_type, block_id)
             self._add_document_number(candidates, line, bbox, block_id, doc_type)
-            self._add_raw_document_number_candidates(candidates, line, bbox, block_id, line_index, len(lines))
             self._add_financial_row(candidates, line, bbox, block_id)
             self._add_date_candidate(candidates, line, bbox, block_id, line_index, len(lines))
 
@@ -415,64 +414,28 @@ class FieldExtractionService:
 
         self._add_bidirectional_context_candidates(candidates, lines, doc_type)
 
-        # Keep currency-marked alternatives even when a labelled total exists.
-        # They let reasoning reject a weak or OCR-corrupted final-total candidate.
-        currency_candidates = [
-            (value, raw_value, currency, line, bbox, block_id, line_index)
-            for line_index, (line, bbox, block_id) in enumerate(lines)
-            if self._financial_role(line) is None
-            for value, raw_value, currency in self._currency_amounts(line)
-        ]
-        largest_by_currency = {
-            currency: max(item[0] for item in currency_candidates if item[2] == currency)
-            for currency in {item[2] for item in currency_candidates}
-        }
-        for value, raw_value, currency, line, bbox, block_id, line_index in currency_candidates:
-            is_largest = value == largest_by_currency[currency]
-            self._add(
-                candidates,
-                "transaction_amount",
-                value,
-                0.62 if is_largest else 0.4,
-                bbox,
-                "currency_largest_fallback" if is_largest else "currency_pattern",
-                line,
-                raw_value=raw_value,
-                source_block_id=block_id,
-                currency=currency,
-                amount_role="unlabelled_currency",
-                source_position=round((line_index + 1) / max(len(lines), 1), 4),
-                candidate_only=True,
-            )
-        return candidates
-
-    def _add_raw_document_number_candidates(
-        self,
-        candidates: dict[str, list[dict[str, Any]]],
-        line: str,
-        bbox: Any,
-        block_id: str,
-        line_index: int,
-        line_count: int,
-    ) -> None:
-        """Offer identifier-shaped OCR spans to Qwen without accepting them deterministically."""
-        for raw_value in _NUMBER_RE.findall(self._normalize_document_number(line)):
-            value = self._parse("document_number", raw_value)
-            if value is None or not self._context_document_number_is_safe(str(value)):
+        # Unlabelled money is useful only as a Qwen alternative.  Ranking the
+        # largest number here made unit prices and unrelated values look like totals.
+        for line_index, (line, bbox, block_id) in enumerate(lines):
+            if self._financial_role(line) is not None:
                 continue
-            self._add(
-                candidates,
-                "document_number",
-                value,
-                0.2,
-                bbox,
-                "raw_identifier_candidate",
-                line,
-                raw_value=raw_value,
-                source_block_id=block_id,
-                source_position=round((line_index + 1) / max(line_count, 1), 4),
-                candidate_only=True,
-            )
+            for value, raw_value, currency in self._currency_amounts(line):
+                self._add(
+                    candidates,
+                    "transaction_amount",
+                    value,
+                    0.2,
+                    bbox,
+                    "unlabelled_currency",
+                    line,
+                    raw_value=raw_value,
+                    source_block_id=block_id,
+                    currency=currency,
+                    amount_role="unlabelled_currency",
+                    source_position=round((line_index + 1) / max(len(lines), 1), 4),
+                    candidate_only=True,
+                )
+        return candidates
 
     def _add_bidirectional_context_candidates(
         self,
@@ -492,33 +455,35 @@ class FieldExtractionService:
                     before_index = index - distance
                     if before_index >= 0:
                         text = "\n".join(line[0] for line in lines[before_index:index])
-                        self._add_context_candidate(
-                            candidates,
-                            name,
-                            text,
-                            alias,
-                            score,
-                            lines[before_index][1],
-                            lines[before_index][2],
-                            "before_label",
-                            distance,
-                            doc_type,
-                        )
+                        if self._context_is_related(lines[before_index][1], bbox, name, text, distance):
+                            self._add_context_candidate(
+                                candidates,
+                                name,
+                                text,
+                                alias,
+                                score,
+                                lines[before_index][1],
+                                lines[before_index][2],
+                                "before_label",
+                                distance,
+                                doc_type,
+                            )
                     after_index = index + distance
                     if after_index < len(lines):
                         text = "\n".join(line[0] for line in lines[index + 1 : after_index + 1])
-                        self._add_context_candidate(
-                            candidates,
-                            name,
-                            text,
-                            alias,
-                            score,
-                            lines[index + 1][1],
-                            lines[index + 1][2],
-                            "after_label",
-                            distance,
-                            doc_type,
-                        )
+                        if self._context_is_related(bbox, lines[index + 1][1], name, text, distance):
+                            self._add_context_candidate(
+                                candidates,
+                                name,
+                                text,
+                                alias,
+                                score,
+                                lines[index + 1][1],
+                                lines[index + 1][2],
+                                "after_label",
+                                distance,
+                                doc_type,
+                            )
 
     def _add_context_candidate(
         self,
@@ -537,8 +502,6 @@ class FieldExtractionService:
         if parsed is None:
             return
         if name == "document_number" and not self._context_document_number_is_safe(str(parsed)):
-            return
-        if name == "transaction_amount" and not self._currency_amounts(value_text):
             return
         if not self._allowed(name, label, doc_type):
             return
@@ -566,7 +529,29 @@ class FieldExtractionService:
 
     @staticmethod
     def _context_document_number_is_safe(value: str) -> bool:
-        return (value.isdigit() and len(value) >= 6) or (any(char.isalpha() for char in value) and any(char.isdigit() for char in value))
+        return (value.isdigit() and len(value) >= 6) or (
+            any(char.isalpha() for char in value) and any(char.isdigit() for char in value)
+        )
+
+    @staticmethod
+    def _context_is_related(
+        label_bbox: Any, value_bbox: Any, name: str, value_text: str, distance: int
+    ) -> bool:
+        """Keep split OCR values local; a raw-text fallback must be immediately adjacent."""
+        if distance > 1 and (not _valid_bbox(label_bbox) or not _valid_bbox(value_bbox)):
+            return False
+        if not _valid_bbox(label_bbox) or not _valid_bbox(value_bbox):
+            return True
+        lx1, ly1, lx2, ly2 = (float(item) for item in label_bbox)
+        vx1, vy1, vx2, vy2 = (float(item) for item in value_bbox)
+        horizontal_overlap = max(0.0, min(lx2, vx2) - max(lx1, vx1))
+        narrower_width = max(1.0, min(lx2 - lx1, vx2 - vx1))
+        same_column = horizontal_overlap / narrower_width >= 0.35
+        vertical_gap = max(vy1 - ly2, ly1 - vy2, 0.0)
+        nearby = vertical_gap <= max(30.0, (ly2 - ly1) * (distance + 1.5))
+        if same_column and nearby:
+            return True
+        return False
 
     def _context_labels(self, value: str) -> list[tuple[str, str, float]]:
         normalized = self._normal_label(value)
@@ -717,6 +702,11 @@ class FieldExtractionService:
             )
             if label is not None:
                 return role, label, score
+        if any(
+            phrase in normalized
+            for phrase in ("total harga", "total price", "total qty", "total quantity", "total barang", "total item")
+        ):
+            return None
         for label, score in _LABELS["transaction_amount"]:
             if normalized == label or normalized.startswith(f"{label} "):
                 return "final_total", label, min(score, 0.98)
@@ -822,6 +812,11 @@ class FieldExtractionService:
         ):
             return False
         if name == "document_number" and any(word in label for word in ("date", "tanggal", "tempo", "tax")):
+            return False
+        if name == "transaction_amount" and any(
+            phrase in label
+            for phrase in ("total harga", "total price", "total qty", "total quantity", "total barang", "total item")
+        ):
             return False
         return not (
             name == "transaction_amount"
