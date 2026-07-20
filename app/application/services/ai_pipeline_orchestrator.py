@@ -479,8 +479,7 @@ class AIPipelineOrchestrator:
 
             # Extract fields
             candidates = self._field_extractor.collect_document_candidates(ocr_results, doc.document_type)
-            fields = self._field_extractor.resolve_document_candidates(candidates)
-            fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc.document_type, ocr_results)
+            fields, reasoning = await self._field_reasoning.resolve(candidates, doc.document_type, ocr_results)
             result.financials = self._field_extractor.build_financials(candidates, fields)
             ocr_aggregated.update(
                 {

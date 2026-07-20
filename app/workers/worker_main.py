@@ -56,7 +56,7 @@ class WorkerMain:
         preprocessor = ImagePreprocessor()
         validator = DocumentValidator()
         field_extractor = FieldExtractionService()
-        field_reasoning = FieldReasoningService()
+        field_reasoning = FieldReasoningService(field_extractor=field_extractor)
         rule_eval = BusinessRuleEvaluator()
         conf_scorer = ConfidenceScoringService()
 

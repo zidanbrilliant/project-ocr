@@ -245,6 +245,54 @@ class FieldExtractionService:
     def resolve_document_candidates(self, candidates: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
         return {name: self._resolve(name, items) for name, items in candidates.items()}
 
+    def build_grounded_candidate(
+        self,
+        name: str,
+        raw_value: str,
+        evidence_quote: str,
+        doc_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Parse a model choice only when it is copied verbatim from OCR evidence."""
+        if (
+            name not in {"document_number", "transaction_amount", "transaction_date"}
+            or not raw_value.strip()
+            or raw_value not in evidence_quote
+        ):
+            return None
+        parsed = self._parse(name, raw_value)
+        if parsed is None:
+            return None
+
+        extra: dict[str, Any] = {}
+        if name == "document_number" and not self._allowed(name, self._normal(evidence_quote), doc_type):
+            return None
+        if name == "transaction_amount":
+            role_data = self._financial_role(evidence_quote)
+            if role_data is not None and role_data[0] != "final_total":
+                return None
+            extra = {
+                "amount_role": "final_total",
+                "currency": self._currency(raw_value) or self._currency(evidence_quote) or "UNKNOWN",
+            }
+        if name == "transaction_date":
+            role_data = self._date_role(evidence_quote)
+            if role_data is not None and role_data[1] != "issue_date":
+                return None
+            extra["date_role"] = "issue_date"
+
+        return {
+            "value": parsed,
+            "raw_value": raw_value,
+            "confidence": 0.8,
+            "score": 0.8,
+            "status": "FOUND",
+            "extraction_method": "qwen_grounded_span",
+            "source_text": evidence_quote,
+            "source_label": None,
+            "source_bbox": None,
+            **extra,
+        }
+
     @staticmethod
     def build_candidate_audit(
         candidates: dict[str, list[dict[str, Any]]], fields: dict[str, dict[str, Any]]

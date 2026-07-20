@@ -79,7 +79,6 @@ class Settings(BaseSettings):
     REASONING_SERVICE_URL: str = ""
     REASONING_TIMEOUT_SECONDS: int = 30
     REASONING_MAX_OUTPUT_TOKENS: int = 256
-    REASONING_CONFIDENCE_THRESHOLD: float = 0.85
     TEST_RESULT_DIR: str = "artifacts/results"
 
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"

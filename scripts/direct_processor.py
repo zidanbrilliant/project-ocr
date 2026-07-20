@@ -41,7 +41,7 @@ class DirectProcessor:
         self._pdf_renderer = PDFRenderer(dpi=200)
         self._preprocessor = ImagePreprocessor()
         self._field_extractor = FieldExtractionService()
-        self._field_reasoning = FieldReasoningService()
+        self._field_reasoning = FieldReasoningService(field_extractor=self._field_extractor)
         self._rule_evaluator = BusinessRuleEvaluator()
         self._conf_scorer = ConfidenceScoringService()
         self._remark = RemarkPolicy()
@@ -262,8 +262,7 @@ class DirectProcessor:
             result["barcode"] = barcode_raw
 
             candidates = self._field_extractor.collect_document_candidates(page_ocrs, doc_type)
-            fields = self._field_extractor.resolve_document_candidates(candidates)
-            fields, reasoning = await self._field_reasoning.resolve(fields, candidates, doc_type, page_ocrs)
+            fields, reasoning = await self._field_reasoning.resolve(candidates, doc_type, page_ocrs)
             result["fields"] = fields
             result["financials"] = self._field_extractor.build_financials(candidates, fields)
             build_audit = getattr(self._field_extractor, "build_candidate_audit", None)

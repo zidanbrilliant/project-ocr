@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.application.services.field_extraction_service import FieldExtractionService
 from app.infrastructure.reasoning.qwen_reasoning_adapter import QwenReasoningAdapter
 from app.shared.config.settings import settings
 
@@ -39,10 +40,15 @@ _MAX_REASONING_CONTEXT_CHARS = 48_000
 
 
 class FieldReasoningService:
-    """Resolve only conflicting OCR candidates and preserve their evidence."""
+    """Resolve fields once, with deterministic fallback and grounded Qwen rescue."""
 
-    def __init__(self, adapter: QwenReasoningAdapter | None = None) -> None:
+    def __init__(
+        self,
+        adapter: QwenReasoningAdapter | None = None,
+        field_extractor: FieldExtractionService | None = None,
+    ) -> None:
         self._adapter = adapter or QwenReasoningAdapter()
+        self._field_extractor = field_extractor or FieldExtractionService()
 
     @property
     def is_available(self) -> bool:
@@ -57,26 +63,19 @@ class FieldReasoningService:
 
     async def resolve(
         self,
-        fields: dict[str, dict[str, Any]],
         candidates: dict[str, list[dict[str, Any]]],
         doc_type: str,
         pages: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-        selected = {
-            name: items
-            for name, items in candidates.items()
-            if items
-            and (
-                len({str(item.get("value")) for item in items}) > 1
-                or (
-                    name in _CORE_SELECTION_FIELDS
-                    and (
-                        fields.get(name, {}).get("status") != "FOUND"
-                        or fields.get(name, {}).get("confidence", 0) < settings.REASONING_CONFIDENCE_THRESHOLD
-                    )
-                )
-            )
-        }
+        fields = self._field_extractor.resolve_document_candidates(candidates)
+        selected: dict[str, list[dict[str, Any]]] = {}
+        for name in set(candidates) | _CORE_SELECTION_FIELDS:
+            items = candidates.get(name, [])
+            if (
+                name in _CORE_SELECTION_FIELDS
+                and (pages or fields.get(name, {}).get("status") != "FOUND")
+            ) or len({str(item.get("value")) for item in items}) > 1:
+                selected[name] = items
         if not settings.REASONING_ENABLED or not selected:
             return fields, {"enabled": settings.REASONING_ENABLED, "used": False, "engine": "deterministic"}
         if not self._adapter.is_available:
@@ -98,7 +97,7 @@ class FieldReasoningService:
                 )
                 and not (name == "transaction_date" and item.get("date_role") in _NON_ISSUE_DATE_ROLES)
             ]
-            if not eligible_items or (
+            if (not eligible_items and name not in _CORE_SELECTION_FIELDS) or (
                 len({str(item.get("value")) for item in eligible_items}) < 2
                 and name not in _CORE_SELECTION_FIELDS
             ):
@@ -121,7 +120,7 @@ class FieldReasoningService:
             indexed: dict[str, dict[str, Any]] = {}
             public_items: list[dict[str, Any]] = []
             for index, item in enumerate(
-                sorted(unique_items.values(), key=lambda item: item.get("score", item["confidence"]), reverse=True)[:12]
+                sorted(unique_items.values(), key=lambda item: item.get("score", item["confidence"]), reverse=True)
             ):
                 candidate_id = f"{name}-{index}"
                 indexed[candidate_id] = item
@@ -146,10 +145,9 @@ class FieldReasoningService:
             candidate_index[name] = indexed
             payload_fields[name] = public_items
 
-        if not payload_fields:
-            return fields, {"enabled": True, "used": False, "engine": "deterministic"}
-
         document_context = self._document_context(pages or [], candidates)
+        if not payload_fields or (not document_context and not any(payload_fields.values())):
+            return fields, {"enabled": True, "used": False, "engine": "deterministic"}
 
         reply = await self._adapter.select(
             {
@@ -166,6 +164,8 @@ class FieldReasoningService:
                 continue
             name, candidate_id = decision.get("field_name"), decision.get("candidate_id")
             item = candidate_index.get(name, {}).get(candidate_id)
+            if item is None:
+                item = self._grounded_candidate(decision, pages or [], doc_type)
             if item is None:
                 continue
             current = fields.get(name, {})
@@ -197,6 +197,36 @@ class FieldReasoningService:
             "context_pages": [page["page_number"] for page in document_context],
             "error": reply.get("error"),
         }
+
+    def _grounded_candidate(
+        self, decision: dict[str, Any], pages: list[dict[str, Any]], doc_type: str
+    ) -> dict[str, Any] | None:
+        name = decision.get("field_name")
+        raw_value = decision.get("raw_value")
+        evidence_quote = decision.get("evidence_quote")
+        page_number = decision.get("page_number")
+        if (
+            name not in _CORE_SELECTION_FIELDS
+            or not isinstance(raw_value, str)
+            or not isinstance(evidence_quote, str)
+            or not isinstance(page_number, int)
+            or not 1 <= page_number <= len(pages)
+        ):
+            return None
+        page = pages[page_number - 1]
+        if evidence_quote not in str(page.get("raw_text", "")):
+            return None
+        item = self._field_extractor.build_grounded_candidate(name, raw_value, evidence_quote, doc_type)
+        if item is None:
+            return None
+        item.update({"source_page_number": page_number, "source_page_index": page_number - 1})
+        for token in page.get("tokens_json", []) or []:
+            token_text = str(token.get("text", ""))
+            if raw_value in token_text or evidence_quote in token_text:
+                item["source_bbox"] = token.get("bbox")
+                item["source_block_id"] = token.get("block_id")
+                break
+        return item
 
     @staticmethod
     def _document_context(pages: list[dict[str, Any]], candidates: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
