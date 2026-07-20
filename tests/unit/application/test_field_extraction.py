@@ -191,6 +191,19 @@ def test_extracts_numeric_receipt_number_and_short_dot_date() -> None:
     assert fields["transaction_date"]["value"] == "2026-07-21"
 
 
+def test_preserves_letter_number_invoice_id_with_spaced_separators() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Invoice No: RI - 23014073"})
+
+    assert fields["document_number"]["value"] == "RI-23014073"
+    assert fields["document_number"]["raw_value"] == "RI - 23014073"
+
+
+def test_extracts_spaced_invoice_id_without_colon() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Invoice Reference RI / 2301 - A77"})
+
+    assert fields["document_number"]["value"] == "RI/2301-A77"
+
+
 def test_rebuilds_native_pdf_words_into_invoice_rows() -> None:
     fields = FieldExtractionService().extract_from_ocr(
         {

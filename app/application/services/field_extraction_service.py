@@ -7,6 +7,7 @@ from typing import Any
 from app.domain.value_objects.money_amount import MoneyAmount
 
 _NUMBER_RE = re.compile(r"(?<![A-Z0-9])(?=[A-Z0-9/.\-]*\d)[A-Z0-9][A-Z0-9/.\-]{2,}", re.IGNORECASE)
+_DOCUMENT_NUMBER_VALUE = r"([A-Z0-9](?:[A-Z0-9]|\s*[/.\-]\s*)*\d(?:[A-Z0-9]|\s*[/.\-]\s*)*)"
 _MONEY_RE = re.compile(r"(?<![A-Z0-9])(?:Rp\.?\s*)?([0-9][0-9.,]*)", re.IGNORECASE)
 _CURRENCY_RE = re.compile(
     r"(?i)(?:(?P<prefix>Rp\.?|IDR\.?|US\$|USD|S\$|SGD|A\$|AUD|C\$|CAD|NZ\$|NZD|HK\$|HKD|CN¥|CNY|RMB|EUR|\u20ac|GBP|\u00a3|JPY|\u00a5|KRW|\u20a9|INR|\u20b9|MYR|RM|THB|\u0e3f|PHP|\u20b1|VND|\u20ab|CHF|AED|SAR|R\$|BRL|ZAR|\$)\s*(?P<prefix_amount>[0-9][0-9.,]*)|(?P<suffix_amount>[0-9][0-9.,]*)\s*(?P<suffix>IDR|USD|SGD|AUD|CAD|NZD|HKD|CNY|RMB|EUR|GBP|JPY|KRW|INR|MYR|THB|PHP|VND|CHF|AED|SAR|BRL|ZAR))"
@@ -434,30 +435,34 @@ class FieldExtractionService:
             return
         match = (
             re.search(
-                r"(?i)\b(?:invoice|inv|faktur(?:\s+penjualan)?|nota|receipt|bill|document|doc)\b\s*[:#\-]?\s*(?:no\.?|number|nomor|#|id|code|reference|ref)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
+                r"(?i)\b(?:invoice|inv|faktur(?:\s+penjualan)?|nota|receipt|bill|document|doc)\b\s*[:#\-]?\s*(?:no\.?|number|nomor|#|id|code|reference|ref)\s*[:#\-]?\s*"
+                + _DOCUMENT_NUMBER_VALUE,
                 line,
             )
             or re.search(
-                r"(?i)\b(?:invoice|inv|faktur(?:\s+penjualan)?|nota|receipt|bill|document|doc)\s*[:#\-]\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
+                r"(?i)\b(?:invoice|inv|faktur(?:\s+penjualan)?|nota|receipt|bill|document|doc)\s*[:#\-]\s*"
+                + _DOCUMENT_NUMBER_VALUE,
                 line,
             )
             or re.search(
-                r"(?i)\b(?:no\.?|number|nomor|id|code|reference|ref)\s*(?:invoice|inv|faktur|nota|receipt|bill)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9/.\-]*\d[A-Z0-9/.\-]*)",
+                r"(?i)\b(?:no\.?|number|nomor|id|code|reference|ref)\s*(?:invoice|inv|faktur|nota|receipt|bill)\s*[:#\-]?\s*"
+                + _DOCUMENT_NUMBER_VALUE,
                 line,
             )
             or re.search(r"(?i)\b((?:INV|FAK)[\s/\-]*[0-9][A-Z0-9/.\-]*)", line)
         )
         if match:
+            raw_value = match.group(1)
             self._add(
                 candidates,
                 "document_number",
-                match.group(1),
+                self._normalize_document_number(raw_value),
                 0.99,
                 bbox,
                 "document_number_pattern",
                 line,
                 source_label="document_number",
-                raw_value=match.group(1),
+                raw_value=raw_value,
                 source_block_id=block_id,
             )
 
@@ -726,7 +731,7 @@ class FieldExtractionService:
 
     def _parse(self, name: str, value: str) -> Any | None:
         if name in {"document_number", "billing_number"}:
-            matches = _NUMBER_RE.findall(value)
+            matches = _NUMBER_RE.findall(self._normalize_document_number(value))
             return max(matches, key=len) if matches else None
         if name == "transaction_amount":
             return self._money(value)
@@ -735,6 +740,10 @@ class FieldExtractionService:
         if name == "vendor_name":
             return value.strip() if len(value.strip()) >= 3 else None
         return None
+
+    @staticmethod
+    def _normalize_document_number(value: str) -> str:
+        return re.sub(r"\s*([/.\-])\s*", r"\1", value.strip())
 
     @staticmethod
     def _money(value: str) -> float | None:
