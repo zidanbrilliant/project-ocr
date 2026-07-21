@@ -430,27 +430,6 @@ class FieldExtractionService:
 
         self._add_bidirectional_context_candidates(candidates, lines, doc_type)
 
-        # Unlabelled money is useful only as a Qwen alternative.  Ranking the
-        # largest number here made unit prices and unrelated values look like totals.
-        for line_index, (line, bbox, block_id) in enumerate(lines):
-            if self._financial_role(line) is not None:
-                continue
-            for value, raw_value, currency in self._currency_amounts(line):
-                self._add(
-                    candidates,
-                    "transaction_amount",
-                    value,
-                    0.2,
-                    bbox,
-                    "unlabelled_currency",
-                    line,
-                    raw_value=raw_value,
-                    source_block_id=block_id,
-                    currency=currency,
-                    amount_role="unlabelled_currency",
-                    source_position=round((line_index + 1) / max(len(lines), 1), 4),
-                    candidate_only=True,
-                )
         return {name: self._deduplicate(items) for name, items in candidates.items()}
 
     def _add_bidirectional_context_candidates(
@@ -526,9 +505,12 @@ class FieldExtractionService:
             )
         ):
             return
-        if name == "document_number" and not self._context_document_number_is_safe(str(parsed)):
-            if not (str(parsed).isdigit() and len(str(parsed)) >= 3 and label_score >= _CONTEXT_LABEL_MIN_SCORE):
-                return
+        if (
+            name == "document_number"
+            and not self._context_document_number_is_safe(str(parsed))
+            and not (str(parsed).isdigit() and len(str(parsed)) >= 3 and label_score >= _CONTEXT_LABEL_MIN_SCORE)
+        ):
+            return
         if not self._allowed(name, label, doc_type):
             return
         money = self._rightmost_money_pair(candidate_text) if name == "transaction_amount" else None
@@ -1062,17 +1044,6 @@ class FieldExtractionService:
             except ValueError:
                 continue
         return None
-
-    @staticmethod
-    def _currency_amounts(value: str) -> list[tuple[float, str, str]]:
-        amounts: list[tuple[float, str, str]] = []
-        for match in _CURRENCY_RE.finditer(value):
-            raw_amount = match.group("prefix_amount") or match.group("suffix_amount")
-            raw_currency = match.group("prefix") or match.group("suffix")
-            parsed = MoneyAmount.parse_rupiah(raw_amount)
-            if parsed:
-                amounts.append((parsed.value, raw_amount, FieldExtractionService._normalize_currency(raw_currency)))
-        return amounts
 
     @staticmethod
     def _currency(value: str) -> str | None:

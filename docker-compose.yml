@@ -81,13 +81,13 @@ services:
       - .env
     environment:
       RUN_MODE: api
-      SERVICE_NAME: qwen-field-reasoning
+      SERVICE_NAME: qwen-vl-field-verification
       ENABLE_DATABASE: "false"
       ENABLE_RABBITMQ: "false"
       OCR_PROVIDER: nemotron
       REASONING_ENABLED: "true"
       REASONING_SERVICE_URL: ""
-      REASONING_MODEL_DIR: ${REASONING_MODEL_DIR:-/mnt/models/Qwen3.5-9B}
+      REASONING_MODEL_DIR: ${REASONING_MODEL_DIR:-/mnt/models/Qwen3-VL-8B}
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:

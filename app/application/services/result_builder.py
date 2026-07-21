@@ -13,7 +13,11 @@ def build_result_envelope(
 ) -> dict[str, Any]:
     """Canonical contract-shaped envelope shared by Streamlit and RabbitMQ output."""
     total = len(documents)
-    ok = sum(1 for document in documents if document.get("document_result", document.get("processing_result")) in {"OK", "SUCCESS"})
+    ok = sum(
+        1
+        for document in documents
+        if document.get("document_result", document.get("processing_result")) in {"OK", "SUCCESS"}
+    )
     ng = total - ok
     overall = "OK" if total and ng == 0 and not errors else "NG"
     return {
@@ -79,7 +83,11 @@ def build_result_payload(
                 ],
                 "barcodes": [page_barcodes[index]] if index < len(page_barcodes) else [],
                 "extracted_fields": page_fields,
-                "document_quality": quality_pages[index] if index < len(quality_pages) else raw_result.get("quality_scores", {}),
+                "document_quality": (
+                    quality_pages[index]
+                    if index < len(quality_pages)
+                    else raw_result.get("quality_scores", {})
+                ),
                 "errors": [{"stage": "OCR", "message": ocr["error"]}] if ocr.get("error") else [],
             }
         )
@@ -224,6 +232,9 @@ def _field_entries(fields: dict[str, Any], page_number: int | None) -> list[dict
                 "extraction_method": field.get("extraction_method", field.get("method")),
                 "reason_code": field.get("reason_code"),
                 "reasoning_engine": field.get("reasoning_engine"),
+                "verification_status": field.get("verification_status"),
+                "independent_evidence_count": field.get("independent_evidence_count"),
+                "manual_review_required": field.get("manual_review_required", False),
                 "amount_role": field.get("amount_role"),
                 "currency": field.get("currency"),
                 "validation": field.get("validation"),
@@ -264,12 +275,21 @@ def _verification(detections: list[dict[str, Any]]) -> dict[str, Any]:
             "result": "OK" if best else "NG",
             "confidence": _confidence(best.get("confidence")) if best else None,
             "count": len(matches),
-            "bounding_box": _bbox(best.get("bounding_box"), best.get("normalized_bounding_box"), None, None) if best else None,
+            "bounding_box": (
+                _bbox(best.get("bounding_box"), best.get("normalized_bounding_box"), None, None)
+                if best
+                else None
+            ),
             "matches": [
                 {
                     "page_number": item.get("page_number"),
                     "confidence": _confidence(item.get("confidence")),
-                    "bounding_box": _bbox(item.get("bounding_box"), item.get("normalized_bounding_box"), item.get("page_width"), item.get("page_height")),
+                    "bounding_box": _bbox(
+                        item.get("bounding_box"),
+                        item.get("normalized_bounding_box"),
+                        item.get("page_width"),
+                        item.get("page_height"),
+                    ),
                 }
                 for item in matches
             ],

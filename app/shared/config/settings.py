@@ -71,21 +71,22 @@ class Settings(BaseSettings):
     RETRY_BACKOFF_SECONDS: int = 30
     RETRY_BACKOFF_MULTIPLIER: int = 2
 
-    WORKER_PREFETCH_COUNT: int = 1
+    WORKER_PREFETCH_COUNT: int = 2
     NEMOTRON_MODEL_DIR: str = "/mnt/models/Nemotron-Parse-v1.2"
     NEMOTRON_SERVICE_URL: str = ""
     REASONING_ENABLED: bool = True
-    REASONING_MODEL_DIR: str = "/mnt/models/Qwen3.5-9B"
+    REASONING_MODEL_DIR: str = "/mnt/models/Qwen3-VL-8B"
     REASONING_SERVICE_URL: str = ""
     REASONING_TIMEOUT_SECONDS: int = 30
-    REASONING_MAX_OUTPUT_TOKENS: int = 256
+    REASONING_MAX_OUTPUT_TOKENS: int = 128
+    VLM_MAX_LONG_EDGE: int = 1600
     TEST_RESULT_DIR: str = "artifacts/results"
 
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"
     INTERNAL_API_KEY: str = ""
 
     # --- concurrency ---
-    MAX_PARALLEL_DOCUMENTS: int = 1
+    MAX_PARALLEL_DOCUMENTS: int = 2
     MAX_PARALLEL_DOWNLOADS: int = 4
     PAGE_MICRO_BATCH_SIZE: int = 2
     MAX_INFLIGHT_PAGES: int = 2

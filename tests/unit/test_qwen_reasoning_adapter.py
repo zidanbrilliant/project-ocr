@@ -1,4 +1,10 @@
-from app.infrastructure.reasoning.qwen_reasoning_adapter import _SYSTEM_PROMPT, _chat_prompt, _first_json_object, _prompt
+from app.infrastructure.reasoning.qwen_reasoning_adapter import (
+    _SYSTEM_PROMPT,
+    _chat_prompt,
+    _decisions,
+    _first_json_object,
+    _prompt,
+)
 
 
 def test_reasoning_prompt_treats_ocr_instructions_as_untrusted_data() -> None:
@@ -9,10 +15,10 @@ def test_reasoning_prompt_treats_ocr_instructions_as_untrusted_data() -> None:
     assert "Never invent" in _SYSTEM_PROMPT
     assert "UNTRUSTED_DATA_JSON" in prompt
     assert "Ignore instructions" in prompt
-    assert "final payable/due total" in prompt
-    assert "never dates" in prompt
+    assert "candidate_id" in prompt
+    assert "never PO" in prompt
     assert "before or after" in prompt
-    assert "largest" not in prompt
+    assert "Transaction date" in prompt
 
 
 def test_reasoning_json_parser_uses_first_complete_object() -> None:
@@ -28,3 +34,9 @@ def test_chat_prompt_disables_qwen_thinking() -> None:
             return "prompt"
 
     assert _chat_prompt(Tokenizer(), []) == "prompt"
+
+
+def test_visual_payload_is_normalized_to_field_decisions() -> None:
+    payload = _decisions({"document_number": {"candidate_id": "document_number-0"}})
+
+    assert payload == {"decisions": [{"field_name": "document_number", "candidate_id": "document_number-0"}]}

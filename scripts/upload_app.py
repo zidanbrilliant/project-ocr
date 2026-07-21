@@ -126,9 +126,9 @@ def _render_model_status(processor: DirectProcessor) -> None:
 
     reasoning = processor._field_reasoning
     if reasoning.is_available:
-        st.success("Qwen3.5-9B reasoning: ready")
+        st.success("Qwen3-VL-8B verification: ready")
     else:
-        st.warning(f"Qwen3.5-9B reasoning: not loaded ({reasoning.load_error or 'warmup pending'})")
+        st.warning(f"Qwen3-VL-8B verification: not loaded ({reasoning.load_error or 'warmup pending'})")
 
     yolo_loaded = getattr(processor._yolo, "_loaded", False)
     if yolo_loaded:
@@ -143,25 +143,31 @@ async def _process_uploaded_files(uploaded_files, doc_type: str) -> None:
             processor = get_processor()
             await processor.warmup()
             started = time.perf_counter()
-            ui_results = []
-            hashes = []
-            for uploaded in uploaded_files:
+            semaphore = asyncio.Semaphore(max(1, min(settings.MAX_PARALLEL_DOCUMENTS, len(uploaded_files))))
+
+            async def process_one(index, uploaded):
                 uploaded_bytes = uploaded.getvalue()
                 if not uploaded_bytes:
                     raise ValueError(f"Uploaded file is empty: {uploaded.name}")
-                hashes.append(hashlib.sha256(uploaded_bytes).hexdigest())
-                document_started = time.perf_counter()
-                raw_result = await processor.process(uploaded_bytes, uploaded.name, doc_type)
-                document_elapsed = round((time.perf_counter() - document_started) * 1000)
-                ui_results.append(
-                    normalize_pipeline_result_for_ui(
+                async with semaphore:
+                    document_started = time.perf_counter()
+                    raw_result = await processor.process(uploaded_bytes, uploaded.name, doc_type)
+                    document_elapsed = round((time.perf_counter() - document_started) * 1000)
+                    result = normalize_pipeline_result_for_ui(
                         raw_result=raw_result,
                         file_name=uploaded.name,
                         content_type=uploaded.type or "",
                         file_size_bytes=len(uploaded_bytes),
                         processing_time_ms=document_elapsed,
                     )
-                )
+                return index, hashlib.sha256(uploaded_bytes).hexdigest(), result
+
+            processed = await asyncio.gather(
+                *(process_one(index, uploaded) for index, uploaded in enumerate(uploaded_files))
+            )
+            processed.sort(key=lambda item: item[0])
+            hashes = [item[1] for item in processed]
+            ui_results = [item[2] for item in processed]
             elapsed = round((time.perf_counter() - started) * 1000)
             documents = [result["rabbitmq_preview"]["documents"][0] for result in ui_results]
             batch_result = build_result_envelope(

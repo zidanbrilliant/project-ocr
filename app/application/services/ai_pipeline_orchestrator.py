@@ -360,6 +360,7 @@ class AIPipelineOrchestrator:
             ocr_results: list[dict] = []
             barcode_results: list[dict] = []
             raw_detections: list[dict[str, Any]] = []
+            visual_page_images: list[bytes] = []
             native_pages = self._ocr_engine.extract_pdf_pages(file_content) if ext == ".pdf" else []
             batches = (
                 self._pdf_renderer.iter_batches(file_content, settings.PAGE_MICRO_BATCH_SIZE)
@@ -370,6 +371,7 @@ class AIPipelineOrchestrator:
             page_offset = 0
 
             for batch in batches:
+                visual_page_images.extend(batch)
                 if quality_image is None and batch:
                     quality_image = batch[0]
                 batch_detections = await self._yolo.detect_batch(batch)
@@ -479,7 +481,9 @@ class AIPipelineOrchestrator:
 
             # Extract fields
             candidates = self._field_extractor.collect_document_candidates(ocr_results, doc.document_type)
-            fields, reasoning = await self._field_reasoning.resolve(candidates, doc.document_type, ocr_results)
+            fields, reasoning = await self._field_reasoning.resolve(
+                candidates, doc.document_type, ocr_results, visual_page_images
+            )
             result.financials = self._field_extractor.build_financials(candidates, fields)
             ocr_aggregated.update(
                 {
@@ -513,6 +517,8 @@ class AIPipelineOrchestrator:
             )
             ocr_entity.vendor_name = fields.get("vendor_name", {}).get("value")
             ocr_entity.transaction_date = fields.get("transaction_date", {}).get("value")
+            ocr_entity.invoice_confidence = fields.get("document_number", {}).get("confidence")
+            ocr_entity.amount_confidence = fields.get("transaction_amount", {}).get("confidence")
             ocr_entity.date_confidence = fields.get("transaction_date", {}).get("confidence")
 
             det_entities = [map_to_entity(d) for d in raw_detections]
