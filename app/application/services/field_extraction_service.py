@@ -510,11 +510,17 @@ class FieldExtractionService:
             else value_text
         )
         candidate_text = candidate_text.lstrip(" \t:=#-")
-        parsed = self._parse(name, candidate_text)
+        money = (
+            self._rightmost_money_pair(candidate_text, first_currency=relation != "before_label")
+            if name == "transaction_amount"
+            else None
+        )
+        parsed = money[0] if money else self._parse(name, candidate_text)
         if parsed is None:
             return
         if name == "transaction_amount" and (
-            self._rightmost_money_pair(candidate_text) is None
+            money is None
+            or (relation != "same_line" and self._currency(candidate_text) is None)
             or (
                 self._currency(candidate_text) is None
                 and (self._date(candidate_text) is not None or re.fullmatch(r"[\s0-9.,]+", candidate_text) is None)
@@ -529,7 +535,6 @@ class FieldExtractionService:
             return
         if not self._allowed(name, label, doc_type):
             return
-        money = self._rightmost_money_pair(candidate_text) if name == "transaction_amount" else None
         self._add(
             candidates,
             name,
@@ -543,7 +548,14 @@ class FieldExtractionService:
             source_block_id=block_id,
             label_relation=relation,
             label_distance=distance,
-            candidate_only=distance > 1,
+            candidate_only=(
+                distance > 1
+                and not (
+                    name == "transaction_amount"
+                    and distance == 2
+                    and self._currency(candidate_text) is not None
+                )
+            ),
             **(
                 {"amount_role": "final_total", "currency": self._currency(value_text) or "UNKNOWN"}
                 if name == "transaction_amount"
@@ -692,7 +704,7 @@ class FieldExtractionService:
         if role_data is None:
             return
         role, label, score = role_data
-        money = self._rightmost_money_pair(line)
+        money = self._rightmost_money_pair(line, first_currency=True)
         if money is None:
             return
         value, raw_value = money
@@ -830,9 +842,13 @@ class FieldExtractionService:
                         role_data = self._financial_role(label)
                         if role_data is not None and role_data[0] != "final_total":
                             return
-                    parsed = self._parse(name, value)
+                    money = (
+                        self._rightmost_money_pair(value, first_currency=True)
+                        if name == "transaction_amount"
+                        else None
+                    )
+                    parsed = money[0] if money else self._parse(name, value)
                     if parsed is not None and self._allowed(name, normalized, doc_type):
-                        money = self._rightmost_money_pair(value) if name == "transaction_amount" else None
                         if name == "transaction_amount":
                             extra = {
                                 "amount_role": "final_total",
@@ -1039,7 +1055,7 @@ class FieldExtractionService:
         return money[0] if money else None
 
     @staticmethod
-    def _rightmost_money_pair(value: str) -> tuple[float, str] | None:
+    def _rightmost_money_pair(value: str, first_currency: bool = False) -> tuple[float, str] | None:
         currency_matches = []
         for match in _CURRENCY_RE.finditer(value):
             raw = match.group("prefix_amount") or match.group("suffix_amount")
@@ -1048,7 +1064,7 @@ class FieldExtractionService:
                 if amount:
                     currency_matches.append((amount.value, raw))
         if currency_matches:
-            return currency_matches[-1]
+            return currency_matches[0] if first_currency else currency_matches[-1]
         matches = [match for match in _MONEY_RE.finditer(value) if not value[match.end() :].lstrip().startswith("%")]
         amount = MoneyAmount.parse_rupiah(matches[-1].group(1)) if matches else None
         return (amount.value, matches[-1].group(1)) if amount else None

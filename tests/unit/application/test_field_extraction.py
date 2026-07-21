@@ -241,7 +241,8 @@ USD
         if item["value"] == 1240.5 and item["extraction_method"] == "context_label_value"
     )
     assert invoice["candidate_only"] and invoice["label_relation"] == "after_label"
-    assert total["candidate_only"] and total["extraction_method"] == "context_label_value"
+    assert not total["candidate_only"] and total["extraction_method"] == "context_label_value"
+    assert service.resolve_document_candidates(candidates)["transaction_amount"]["value"] == 1240.5
 
 
 def test_recovers_short_numeric_invoice_only_near_a_strong_label() -> None:
@@ -342,6 +343,24 @@ def test_total_amount_ignores_percent_after_currency_value() -> None:
 
     assert fields["transaction_amount"]["value"] == 1240.5
     assert fields["transaction_amount"]["raw_value"] == "1,240.50"
+
+
+def test_total_amount_prefers_currency_value_nearest_after_label() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Grand Total: USD 1,240.50 (tax reference USD 120.00)"}
+    )
+
+    assert fields["transaction_amount"]["value"] == 1_240.50
+    assert fields["transaction_amount"]["raw_value"] == "1,240.50"
+
+
+def test_total_amount_prefers_closest_currency_value_on_following_lines() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Grand Total\nUSD 1,240.50\nTax reference USD 120.00"}
+    )
+
+    assert fields["transaction_amount"]["value"] == 1_240.50
+    assert fields["transaction_amount"]["label_relation"] == "after_label"
 
 
 def test_handles_common_ocr_typos_in_invoice_and_total_labels() -> None:
