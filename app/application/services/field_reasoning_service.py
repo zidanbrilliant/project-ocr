@@ -220,14 +220,50 @@ class FieldReasoningService:
         self, document_result: str, fields: dict[str, dict[str, Any]], failed_rules: list[dict[str, Any]]
     ) -> dict[str, Any]:
         failed_items = [str(rule.get("rule_name", "Validation failed")) for rule in failed_rules]
-        fallback = {
+        if self._adapter is not None and self._adapter.is_available:
+            try:
+                return await self._summarize_with_llm(document_result, fields, failed_rules, failed_items)
+            except Exception:
+                pass
+        return {
             "result": document_result,
             "failed_items": failed_items,
             "reason": "Verification passed." if not failed_items else "; ".join(failed_items[:3]),
             "recommendations": [],
             "engine": "deterministic",
         }
-        return fallback
+
+    async def _summarize_with_llm(
+        self,
+        document_result: str,
+        fields: dict[str, dict[str, Any]],
+        failed_rules: list[dict[str, Any]],
+        failed_items: list[str],
+    ) -> dict[str, Any]:
+        field_str = ", ".join(
+            f"{name}={field.get('value')}" for name, field in fields.items()
+            if field.get("value") is not None
+        )
+        rule_str = "; ".join(
+            f"{r.get('rule_name')}: {r.get('message', '')}" for r in failed_rules
+        ) if failed_rules else "None"
+        prompt = (
+            f"Document verification: {document_result}. "
+            f"Fields: {field_str}. "
+            f"Failed rules: {rule_str}. "
+            f"Provide a 1-2 sentence summary in Bahasa Indonesia."
+        )
+        result = await self._adapter.select({"requests": [{"id": "summary", "text": prompt}]})
+        decisions = result.get("decisions", [])
+        ai_reason = decisions[0].get("selected", "") if decisions else ""
+        engine = "qwen3.5-9b" if ai_reason.strip() else "deterministic"
+        return {
+            "result": document_result,
+            "failed_items": failed_items,
+            "reason": ai_reason.strip() or ("Verification passed." if not failed_items else "; ".join(failed_items[:3])),
+            "recommendations": [],
+            "engine": engine,
+        }
 
 
 def _ocr_contains(text: str, value: str) -> bool:

@@ -1,4 +1,6 @@
 import asyncio
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +20,7 @@ class YOLOAdapter:
         self._load_error: str | None = None
         self._last_detect_error: str | None = None
         self._device = "cpu"
-        self._inference_lock = asyncio.Lock()
+        self._gpu_executor = ThreadPoolExecutor(max_workers=1)
 
     @property
     def load_error(self) -> str | None:
@@ -33,8 +35,7 @@ class YOLOAdapter:
         return self._device
 
     async def warmup(self) -> None:
-        async with self._inference_lock:
-            await asyncio.to_thread(self._warmup_sync)
+        await asyncio.get_event_loop().run_in_executor(self._gpu_executor, self._warmup_sync)
 
     def _warmup_sync(self) -> None:
         try:
@@ -72,8 +73,9 @@ class YOLOAdapter:
                 detections.extend(chunk)
             return detections
 
-        async with self._inference_lock:
-            return await asyncio.to_thread(self._detect_batch_sync, image_bytes_list, input_size)
+        return await asyncio.get_event_loop().run_in_executor(
+            self._gpu_executor, self._detect_batch_sync, image_bytes_list, input_size
+        )
 
     def _detect_batch_sync(self, image_bytes_list: list[bytes], input_size: int | None) -> list[dict[str, Any]]:
         try:

@@ -277,18 +277,16 @@ class AIPipelineOrchestrator:
             result_payload["documents"],
             duration_ms,
             statuses.COMPLETED if error_count == 0 else return_codes.PARTIAL_SUCCESS,
+            queue_id=req.queue_id,
+            pv_no=req.business_entity_id or "",
+            pv_year=req.business_entity_year or "",
+            source_system=req.source_system,
+            overall_confidence=folder_confidence,
+            confidence_level=ConfidenceScore.level(folder_confidence),
+            confidence_threshold=settings.CONFIDENCE_THRESHOLD,
+            ai_note_override=f"{ok_count} OK, {ng_count} NG document(s); folder confidence uses the lowest document score.",
         )
         result_payload.update({key: value for key, value in envelope.items() if key != "documents"})
-        result_payload["header"].update(
-            {
-                "ai_confidence": folder_confidence,
-                "ai_confidence_level": ConfidenceScore.level(folder_confidence),
-                "confidence_threshold": settings.CONFIDENCE_THRESHOLD,
-                "ai_note": (
-                    f"{ok_count} OK, {ng_count} NG document(s); folder confidence uses the lowest document score."
-                ),
-            }
-        )
 
         # Save final result
         final_result = FinalResult(

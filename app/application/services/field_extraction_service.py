@@ -13,7 +13,7 @@ _CURRENCY_RE = re.compile(
     r"(?i)(?:(?P<prefix>Rp\.?|IDR\.?|US\$|USD|S\$|SGD|A\$|AUD|C\$|CAD|NZ\$|NZD|HK\$|HKD|CN¥|CNY|RMB|EUR|\u20ac|GBP|\u00a3|JPY|\u00a5|KRW|\u20a9|INR|\u20b9|MYR|RM|THB|\u0e3f|PHP|\u20b1|VND|\u20ab|CHF|AED|SAR|R\$|BRL|ZAR|\$)\s*(?P<prefix_amount>[0-9][0-9.,]*)|(?P<suffix_amount>[0-9][0-9.,]*)\s*(?P<suffix>IDR|USD|SGD|AUD|CAD|NZD|HKD|CNY|RMB|EUR|GBP|JPY|KRW|INR|MYR|THB|PHP|VND|CHF|AED|SAR|BRL|ZAR))"
 )
 _DATE_RE = re.compile(
-    r"(?i)\b(?:\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}[./-](?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[./-]\d{2,4}|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{2,4}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2},?\s+\d{2,4})\b"
+    r"(?i)\b(?:\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}[./-](?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|okt|oct(?:ober)?|nov(?:ember)?|des|dec(?:ember)?|agt|peb)[./-]\d{2,4}|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|okt|oct(?:ober)?|nov(?:ember)?|des|dec(?:ember)?|agt|peb)\s+\d{2,4}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|okt|oct(?:ober)?|nov(?:ember)?|des|dec(?:ember)?|agt|peb)\s+\d{1,2},?\s+\d{2,4})\b"
 )
 _DATE_FORMATS = (
     "%d/%m/%Y",
@@ -50,12 +50,22 @@ _MONTHS = {
 
 _AMOUNT_ROLES: tuple[tuple[str, tuple[str, ...], float], ...] = (
     ("subtotal", ("jumlah harga jual", "subtotal", "sub total", "amount before tax"), 0.45),
-    ("discount", ("dikurangi potongan harga", "potongan harga", "discount"), 0.35),
+    ("discount", (
+        "dikurangi potongan harga", "potongan harga", "discount",
+        "diskon", "potongan", "potongan penjualan",
+        "rabat", "rebate", "courtesy discount", "trade discount",
+    ), 0.35),
     ("tax_base", ("dasar pengenaan pajak", "taxable amount", "tax base", "dpp"), 0.25),
-    ("tax", ("ppn", "vat", "tax", "pajak"), 0.2),
+    ("withholding_tax", (
+        "withholding tax", "pph", "pajak penghasilan",
+        "pph 23", "pph 22", "pph 21", "pph pasal",
+    ), 0.25),
+    ("tax", (
+        "ppn", "vat", "pajak pertambahan nilai",
+        "ppnbm", "gst", "hst", "sales tax",
+    ), 0.2),
     ("service_charge", ("service charge", "biaya layanan", "handling fee", "admin fee", "administration fee"), 0.3),
     ("shipping", ("shipping", "freight", "ongkir", "delivery fee"), 0.3),
-    ("withholding_tax", ("withholding tax", "pph", "pajak penghasilan"), 0.25),
     ("rounding", ("rounding", "pembulatan"), 0.2),
     ("paid", ("amount paid", "paid amount", "jumlah dibayar", "tunai", "cash received", "change"), 0.1),
 )
@@ -72,7 +82,7 @@ _NON_PAYABLE_ROLES = {
     "paid",
 }
 _NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period", "unlabelled"}
-_CONTEXT_FIELDS = {"document_number", "transaction_amount"}
+_CONTEXT_FIELDS = {"document_number", "transaction_amount", "billing_number"}
 _CONTEXT_LABEL_MIN_SCORE = 0.9
 
 
@@ -679,7 +689,7 @@ class FieldExtractionService:
                 + _DOCUMENT_NUMBER_VALUE,
                 line,
             )
-            or re.search(r"(?i)\b((?:INV|FAK)[\s/\-]*[0-9][A-Z0-9/.\-]*)", line)
+            or re.search(r"(?i)\b((?:INV|FAK|NOTA|RCP|DOC|BILL|KW|TRX|PO|SO|DO|ORD)[\s/\-]*[0-9][A-Z0-9/.\-]*)", line)
         )
         if match:
             raw_value = match.group(1)
@@ -946,7 +956,10 @@ class FieldExtractionService:
         winner = dict(items[0])
         runner_up = items[1] if len(items) > 1 else None
         ambiguous = bool(
-            runner_up and winner["value"] != runner_up["value"] and winner["score"] - runner_up["score"] < 0.08
+            runner_up
+            and winner["value"] != runner_up["value"]
+            and winner["score"] - runner_up["score"] < 0.08
+            and not str(winner.get("validation", "")).startswith("RECONCILED")
         )
         winner["status"] = "AMBIGUOUS" if ambiguous else "FOUND"
         winner["candidate_count"] = len(items)
@@ -1004,12 +1017,13 @@ class FieldExtractionService:
         taxes = values("tax")
         tax_bases = values("tax_base")
         if tax_bases and taxes:
-            return tax_bases[-1] + sum(taxes), "RECONCILED_DPP_PLUS_TAX"
+            return sum(tax_bases) + sum(taxes), "RECONCILED_DPP_PLUS_TAX"
         subtotals = values("subtotal")
         if not subtotals:
             return None, "NOT_APPLICABLE"
+        total_subtotal = sum(subtotals)
         return (
-            subtotals[-1]
+            total_subtotal
             - sum(values("discount"))
             + sum(taxes)
             + sum(values("service_charge"))
@@ -1139,17 +1153,32 @@ class FieldExtractionService:
 
     @staticmethod
     def _normal_label(value: str) -> str:
-        """Correct only predictable OCR mistakes in labels, never in extracted values."""
+        """Correct predictable OCR mistakes in labels, never in extracted values."""
         normalized = FieldExtractionService._normal(value)
         replacements = {
-            "lnvoice": "invoice",
-            "inv0ice": "invoice",
-            "invo1ce": "invoice",
-            "t0tal": "total",
-            "tota1": "total",
-            "am0unt": "amount",
-            "n0mor": "nomor",
+            "lnvoice": "invoice", "inv0ice": "invoice", "invo1ce": "invoice",
+            "1nvoice": "invoice", "imvoice": "invoice", "invoic": "invoice",
+            "t0tal": "total", "tota1": "total", "t0ta1": "total",
+            "am0unt": "amount", "am0un": "amount",
+            "n0mor": "nomor", "n0m0r": "nomor", "nom0r": "nomor",
             "n0": "no",
+            "gr@nd": "grand", "6rand": "grand",
+            "paj@k": "pajak", "p@jak": "pajak",
+            "p0tongan": "potongan", "pot0ngan": "potongan",
+            "d1skon": "diskon", "disk0n": "diskon", "d1sk0n": "diskon",
+            "tangga1": "tanggal", "tang9al": "tanggal",
+            "f@ktur": "faktur", "fakt0r": "faktur", "f@kt0r": "faktur",
+            "penjua1an": "penjualan",
+            "t@nggal": "tanggal",
+            "jum1ah": "jumlah",
+            "harg@": "harga",
+            "suda1": "sudah",
+            "termasu1": "termasuk",
+            "pembayaran": "pembayaran",
+            "dpp": "dpp",
+            "nom0r": "nomor",
+            "penga1aman": "pengalaman",
+            "tunjangan": "tunjangan",
         }
         return " ".join(replacements.get(word, word) for word in normalized.split())
 

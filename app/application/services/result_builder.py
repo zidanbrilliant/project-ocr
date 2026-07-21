@@ -4,12 +4,52 @@ from typing import Any
 
 RESULT_SCHEMA_VERSION = "1.1.0"
 
+DEFAULT_MODEL_INFO = {
+    "model_name": "Vision-AI",
+    "model_version": "v2.6.0",
+    "trained_date": "2026-06-15",
+}
+DEFAULT_MODELS_INFO = {
+    "object_detection": {
+        "engine": "Ultralytics YOLO",
+        "framework": "ultralytics",
+        "model_name": "best-v5.pt",
+        "model_version": "sesi_4",
+        "device": "cuda:0",
+        "input_size": 640,
+        "confidence_threshold": 0.25,
+        "nms_threshold": 0.45,
+        "classes": {"0": "barcode", "1": "materai", "2": "signature", "3": "stamp"},
+    },
+    "ocr": {
+        "engine": "NVIDIA Nemotron Parse v1.2",
+        "provider": "nemotron-parse",
+        "version": "1.2",
+        "device": "cuda:0",
+        "languages": ["en", "id"],
+    },
+    "barcode": {
+        "primary": "zxing-cpp",
+        "fallback": ["pyzbar", "opencv"],
+        "decoders": ["zxing-cpp", "pyzbar", "opencv"],
+    },
+}
+
 
 def build_result_envelope(
     documents: list[dict[str, Any]],
     duration_ms: int,
     status: str = "COMPLETED",
     errors: list[Any] | None = None,
+    *,
+    queue_id: str = "",
+    pv_no: str = "",
+    pv_year: str = "",
+    source_system: str = "",
+    overall_confidence: float | None = None,
+    confidence_level: str = "",
+    confidence_threshold: int = 85,
+    ai_note_override: str | None = None,
 ) -> dict[str, Any]:
     """Canonical contract-shaped envelope shared by Streamlit and RabbitMQ output."""
     total = len(documents)
@@ -20,15 +60,29 @@ def build_result_envelope(
     )
     ng = total - ok
     overall = "OK" if total and ng == 0 and not errors else "NG"
+
+    header = {
+        "message_version": "1.0",
+        "queue_no": queue_id,
+        "response_schema_version": RESULT_SCHEMA_VERSION,
+        "pv_no": pv_no,
+        "pv_year": pv_year,
+        "request_source": source_system,
+        "response_source": "AI Verification Service",
+        "overall_result": overall,
+        "processing_status": status,
+        "processing_result": "SUCCESS" if not errors else "PARTIAL_SUCCESS",
+        "ai_confidence": overall_confidence,
+        "ai_confidence_level": confidence_level,
+        "confidence_threshold": confidence_threshold,
+        "model": DEFAULT_MODEL_INFO,
+        "models": DEFAULT_MODELS_INFO,
+        "ai_note": ai_note_override or f"{ok} OK, {ng} NG document(s)",
+    }
+
     return {
         "schema_version": RESULT_SCHEMA_VERSION,
-        "header": {
-            "response_schema_version": RESULT_SCHEMA_VERSION,
-            "overall_result": overall,
-            "processing_status": status,
-            "processing_result": "SUCCESS" if not errors else "PARTIAL_SUCCESS",
-            "ai_note": f"{ok} OK, {ng} NG document(s)",
-        },
+        "header": header,
         "processing": {"status": status, "duration_ms": duration_ms},
         "documents": documents,
         "summary": {
@@ -36,6 +90,8 @@ def build_result_envelope(
             "ok_documents": ok,
             "ng_documents": ng,
             "total_pages": sum(len(document.get("pages", [])) for document in documents),
+            "main_document": total,
+            "second_document": 0,
         },
         "errors": errors or [],
     }
@@ -72,6 +128,10 @@ def build_result_payload(
                 "ocr": {
                     "status": "FAILED" if ocr.get("error") else "SUCCESS",
                     "engine": ocr.get("engine_name", raw_result.get("ocr", {}).get("engine_name", "unknown")),
+                    "provider": "nemotron-parse",
+                    "version": "1.2",
+                    "device": "cuda:0",
+                    "languages": ["en", "id"],
                     "raw_text": ocr.get("raw_text", ""),
                     "average_confidence": _confidence(ocr.get("average_confidence")),
                     "duration_ms": ocr.get("processing_time_ms"),
@@ -92,6 +152,7 @@ def build_result_payload(
             }
         )
 
+    confidence = raw_result.get("confidence", {})
     document = {
         "document_id": raw_result.get("document_id", "TEST-DOC-001"),
         "document_index": raw_result.get("document_index", 0),
@@ -101,6 +162,10 @@ def build_result_payload(
         "page_count": len(pages),
         "processing_status": "FAILED" if raw_result.get("error") else "COMPLETED",
         "processing_result": raw_result.get("status", "FAILED"),
+        "document_result": (
+            "OK" if confidence.get("overall_result") == "OK" and raw_result.get("validation", {}).get("passed")
+            else "NG"
+        ),
         "processing_time_ms": processing_time_ms or raw_result.get("processing_time_ms", 0),
         "file_information": {
             "file_name": file_name,
@@ -110,6 +175,10 @@ def build_result_payload(
         },
         "ocr": {
             "engine": raw_result.get("ocr", {}).get("engine_name", "unknown"),
+            "provider": "nemotron-parse",
+            "version": "1.2",
+            "device": "cuda:0",
+            "languages": ["en", "id"],
             "raw_text": raw_result.get("ocr", {}).get("raw_text", ""),
             "average_confidence": _confidence(raw_result.get("ocr", {}).get("average_confidence")),
         },
@@ -119,7 +188,7 @@ def build_result_payload(
         "document_color": raw_result.get("document_color", {}),
         "detections": [_detection_entry(d, d.get("page_number", 1) - 1, None, None) for d in detections],
         "validation": raw_result.get("validation", {}),
-        "confidence": raw_result.get("confidence", {}),
+        "confidence": confidence,
         "reasoning": raw_result.get("reasoning", {"enabled": False}),
         "business_rule": _business_rule(raw_result.get("validation", {})),
         "document_summary": raw_result.get("document_summary", {}),
@@ -128,11 +197,14 @@ def build_result_payload(
         "pages": pages,
         "errors": [error for error in (raw_result.get("error"), raw_result.get("detection_error")) if error],
     }
+    conf = document.get("confidence", {})
     return build_result_envelope(
         [document],
         processing_time_ms,
         raw_result.get("status", "FAILED"),
         document["errors"],
+        overall_confidence=conf.get("total"),
+        confidence_level=conf.get("level", ""),
     )
 
 
@@ -194,7 +266,7 @@ def _bbox(pixel: Any, normalized: Any, width: int | None, height: int | None) ->
             round(values[2] / width, 6),
             round(values[3] / height, 6),
         ]
-    return {"pixel_xyxy": values, "normalized_xyxy": normalized}
+    return {"pixel_xyxy": values, "normalized_xyxy": normalized, "pdf_points_xyxy": values}
 
 
 def _flat_box(value: Any) -> list[int]:

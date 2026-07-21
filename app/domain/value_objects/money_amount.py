@@ -15,19 +15,34 @@ class MoneyAmount:
         if not cleaned:
             return None
         if "," in cleaned and "." in cleaned:
-            # The last separator is decimal; the other is a thousands separator.
             decimal = "," if cleaned.rfind(",") > cleaned.rfind(".") else "."
             cleaned = cleaned.replace("." if decimal == "," else ",", "")
             if decimal == ",":
                 cleaned = cleaned.replace(",", ".")
         elif cleaned.count(",") > 1:
-            cleaned = cleaned.replace(",", "")
+            parts = cleaned.rsplit(",", 1)
+            if len(parts[1]) <= 2:
+                cleaned = parts[0].replace(",", "") + "." + parts[1]
+            else:
+                cleaned = cleaned.replace(",", "")
         elif cleaned.count(".") > 1:
-            cleaned = cleaned.replace(".", "")
-        elif "," in cleaned and len(cleaned.rsplit(",", 1)[1]) != 2:
-            cleaned = cleaned.replace(",", "")
-        elif "." in cleaned and len(cleaned.rsplit(".", 1)[1]) != 2:
-            cleaned = cleaned.replace(".", "")
+            parts = cleaned.rsplit(".", 1)
+            if len(parts[1]) <= 2:
+                cleaned = parts[0].replace(".", "") + "." + parts[1]
+            else:
+                cleaned = cleaned.replace(".", "")
+        elif "," in cleaned:
+            trailing = cleaned.rsplit(",", 1)[1]
+            if len(trailing) <= 2:
+                cleaned = cleaned.replace(",", ".")
+            else:
+                cleaned = cleaned.replace(",", "")
+        elif "." in cleaned:
+            trailing = cleaned.rsplit(".", 1)[1]
+            if len(trailing) <= 2:
+                pass
+            else:
+                cleaned = cleaned.replace(".", "")
         else:
             cleaned = cleaned.replace(",", ".")
         try:
