@@ -670,6 +670,8 @@ class FieldExtractionService:
     def _add_financial_row(
         self, candidates: dict[str, list[dict[str, Any]]], line: str, bbox: Any, block_id: str
     ) -> None:
+        if re.search(r"(?i)\bfaktur\s+pajak\b", line):
+            return
         role_data = self._financial_role(line)
         if role_data is None:
             return
@@ -996,7 +998,10 @@ class FieldExtractionService:
             if self._date(value) is not None or _CURRENCY_RE.search(value) or "%" in value:
                 return None
             value = re.sub(r"(?i)^\s*(?:no\.?|number|nomor|id|code|reference|ref)\s*[:#\-]?\s*", "", value)
-            matches = _NUMBER_RE.findall(self._normalize_document_number(value))
+            normalized = self._normalize_document_number(value)
+            if re.fullmatch(r"(?i)[A-Z0-9][A-Z0-9 /.\-]*\d[A-Z0-9 /.\-]*", normalized):
+                return normalized
+            matches = _NUMBER_RE.findall(normalized)
             return max(matches, key=len) if matches else None
         if name == "transaction_amount":
             return self._rightmost_money(value)
@@ -1008,7 +1013,8 @@ class FieldExtractionService:
 
     @staticmethod
     def _normalize_document_number(value: str) -> str:
-        return re.sub(r"\s*([/.\-])\s*", r"\1", value.strip())
+        value = re.sub(r"\s*([/.\-])\s*", r"\1", value.strip())
+        return re.sub(r"\s+", " ", value)
 
     @staticmethod
     def _rightmost_money(value: str) -> float | None:

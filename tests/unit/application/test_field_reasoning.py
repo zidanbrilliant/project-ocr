@@ -128,6 +128,39 @@ def test_generic_date_is_not_sent_as_an_issue_date_candidate(monkeypatch) -> Non
     assert resolved["transaction_date"]["status"] == "NOT_FOUND"
 
 
+def test_visual_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = VisualAdapter(
+        [
+            {
+                "field_name": "transaction_date",
+                "candidate_id": "transaction_date-0",
+                "reason_code": "DOCUMENT_ISSUE_DATE",
+            }
+        ]
+    )
+    candidates = {
+        "transaction_date": [
+            {
+                "value": "2026-04-01",
+                "confidence": 0.45,
+                "score": 0.45,
+                "date_role": "unlabelled",
+                "source_page_number": 1,
+                "source_text": "Cibitung,\n01 April 2026",
+            }
+        ]
+    }
+
+    resolved, _ = asyncio.run(
+        FieldReasoningService(adapter).resolve(candidates, "INV", [{"raw_text": "Cibitung,\n01 April 2026"}], [b"page"])
+    )
+
+    assert adapter.request["candidates"]["transaction_date"][0]["value"] == "2026-04-01"
+    assert resolved["transaction_date"]["value"] == "2026-04-01"
+    assert resolved["transaction_date"]["verification_status"] == "VERIFIED"
+
+
 def test_invalid_visual_response_keeps_strong_deterministic_evidence(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
 

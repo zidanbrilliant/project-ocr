@@ -37,7 +37,7 @@ _NON_PAYABLE_ROLES = {
     "rounding",
     "paid",
 }
-_NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period", "unlabelled"}
+_NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period"}
 _MAX_VISUAL_CONTEXT_CHARS = 12_000
 _MAX_VISUAL_PAGES = 2
 

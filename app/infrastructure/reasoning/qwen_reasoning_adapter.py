@@ -96,8 +96,9 @@ class QwenReasoningAdapter:
                     response.raise_for_status()
                 return response.json()
             except Exception as exc:
-                logger.warning("qwen_vl_remote_failed", error=str(exc))
-                return {"error": f"remote_reasoning_error:{exc}", "decisions": []}
+                error = f"remote_reasoning_error:{type(exc).__name__}:{exc}"
+                logger.warning("qwen_vl_remote_failed", error=error)
+                return {"error": error, "decisions": []}
         if not request.get("images"):
             return {"error": "visual_input_required", "decisions": []}
         async with self._lock:

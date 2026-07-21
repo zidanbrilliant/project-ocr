@@ -183,6 +183,16 @@ def test_preserves_letter_number_invoice_id_with_spaced_separators() -> None:
     assert fields["document_number"]["raw_value"] == "RI - 23014073"
 
 
+def test_preserves_spaced_numeric_invoice_prefix_and_ignores_tax_invoice_identifier() -> None:
+    service = FieldExtractionService()
+    candidates = service.collect_document_candidates(
+        [{"raw_text": "No. Invoice : 030 NTC0426\nFaktur Pajak 04002600142617401"}], "INV"
+    )
+
+    assert candidates["document_number"][0]["value"] == "030 NTC0426"
+    assert not any(item["raw_value"] == "04002600142617401" for item in candidates.get("transaction_amount", []))
+
+
 def test_extracts_spaced_invoice_id_without_colon() -> None:
     fields = FieldExtractionService().extract_from_ocr({"raw_text": "Invoice Reference RI / 2301 - A77"})
 

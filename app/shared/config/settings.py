@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     REASONING_ENABLED: bool = True
     REASONING_MODEL_DIR: str = "/mnt/models/Qwen3-VL-8B"
     REASONING_SERVICE_URL: str = ""
-    REASONING_TIMEOUT_SECONDS: int = 30
+    REASONING_TIMEOUT_SECONDS: int = 60
     REASONING_MAX_OUTPUT_TOKENS: int = 128
     VLM_MAX_LONG_EDGE: int = 1600
     TEST_RESULT_DIR: str = "artifacts/results"
