@@ -11,39 +11,21 @@ _FIELD_DEFINITIONS = {
     "document_number": (
         "commercial invoice or document number, not a tax invoice number unless the document is tax invoice"
     ),
-    "billing_number": "billing or payment reference number",
-    "transaction_amount": "final payable amount, not DPP, PPN, subtotal, or unit price",
     "transaction_date": "document issuance or invoice date",
-    "vendor_name": "seller, supplier, or issuer; not buyer or recipient",
 }
 
 _REASON_CODES = {
     "document_number": {"COMMERCIAL_DOCUMENT_NUMBER"},
-    "billing_number": {"BILLING_REFERENCE"},
-    "transaction_amount": {"FINAL_PAYABLE_TOTAL"},
     "transaction_date": {"DOCUMENT_ISSUE_DATE"},
-    "vendor_name": {"SELLER_OR_ISSUER"},
 }
 _CORE_SELECTION_FIELDS = {"document_number", "transaction_amount", "transaction_date"}
 _VISUAL_FIELDS = ("document_number", "transaction_date")
-_NON_PAYABLE_ROLES = {
-    "subtotal",
-    "discount",
-    "tax_base",
-    "tax",
-    "service_charge",
-    "shipping",
-    "withholding_tax",
-    "rounding",
-    "paid",
-}
-_NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period"}
 _MAX_VISUAL_CONTEXT_CHARS = 12_000
 _MAX_VISUAL_PAGES = 2
 
 
 class FieldReasoningService:
-    """Resolve fields once, with deterministic fallback and grounded Qwen rescue."""
+    """Extract invoice/date visually, with a deterministic fallback when Qwen is unavailable."""
 
     def __init__(
         self,
@@ -73,10 +55,8 @@ class FieldReasoningService:
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
         fields = self._field_extractor.resolve_document_candidates(candidates)
         resolved = self._strict_core_fallback(fields, candidates)
-        visual_fields = [
-            name for name in _VISUAL_FIELDS if self._needs_visual_verification(name, fields.get(name, {}), candidates)
-        ]
-        if not settings.REASONING_ENABLED or not visual_fields:
+        visual_fields = list(_VISUAL_FIELDS)
+        if not settings.REASONING_ENABLED:
             return resolved, {"enabled": settings.REASONING_ENABLED, "used": False, "engine": "deterministic"}
         if not page_images:
             return resolved, {
@@ -93,97 +73,40 @@ class FieldReasoningService:
                 "error": self._adapter.load_error or "reasoning_not_ready",
             }
 
-        candidate_index: dict[str, dict[str, dict[str, Any]]] = {}
-        payload_fields: dict[str, list[dict[str, Any]]] = {}
-        for name in visual_fields:
-            items = candidates.get(name, [])
-            eligible_items = [
-                item
-                for item in items
-                if not (name == "transaction_date" and item.get("date_role") in _NON_ISSUE_DATE_ROLES)
-            ]
-            # One value can be discovered by several OCR paths.  Give the model
-            # distinct values, not twelve copies of the same noisy candidate.
-            unique_items: dict[tuple[Any, ...], dict[str, Any]] = {}
-            for item in eligible_items:
-                key = (
-                    str(item.get("value")),
-                    item.get("currency"),
-                    item.get("amount_role"),
-                    item.get("source_page_number"),
-                    item.get("label_relation"),
-                )
-                if key not in unique_items or float(item.get("score", item["confidence"])) > float(
-                    unique_items[key].get("score", unique_items[key]["confidence"])
-                ):
-                    unique_items[key] = item
-            indexed: dict[str, dict[str, Any]] = {}
-            public_items: list[dict[str, Any]] = []
-            for index, item in enumerate(
-                sorted(unique_items.values(), key=lambda item: item.get("score", item["confidence"]), reverse=True)
-            ):
-                candidate_id = f"{name}-{index}"
-                indexed[candidate_id] = item
-                public_items.append(
-                    {
-                        "candidate_id": candidate_id,
-                        "value": item["value"],
-                        "label": item.get("source_label"),
-                        "confidence": item.get("confidence"),
-                        "currency": item.get("currency"),
-                        "amount_role": item.get("amount_role"),
-                        "source_text": str(item.get("source_text", ""))[:500],
-                        "page": item.get("source_page_number"),
-                        "block_id": item.get("source_block_id"),
-                        "bbox": item.get("source_bbox"),
-                        "document_position": item.get("source_position"),
-                        "label_relation": item.get("label_relation"),
-                        "label_distance": item.get("label_distance"),
-                        "extraction_method": item.get("extraction_method"),
-                    }
-                )
-            candidate_index[name] = indexed
-            payload_fields[name] = public_items
-
         document_context = self._document_context(pages or [], candidates, visual_fields)
         images = self._visual_images(page_images or [], document_context)
-        if not payload_fields or not document_context:
+        if not document_context or not images:
             return resolved, {"enabled": True, "used": False, "engine": "deterministic"}
 
         reply = await self._adapter.select(
             {
                 "document_type": doc_type,
                 "requested_fields": visual_fields,
-                "field_definitions": {name: _FIELD_DEFINITIONS.get(name, name) for name in payload_fields},
-                "candidates": payload_fields,
+                "field_definitions": _FIELD_DEFINITIONS,
                 "page_ocr": document_context,
                 "images": images,
             }
         )
         applied: list[str] = []
-        conflicts: list[str] = []
+        overrides: list[str] = []
         for decision in reply.get("decisions", []) if isinstance(reply.get("decisions"), list) else []:
             if not isinstance(decision, dict):
                 continue
-            name, candidate_id = decision.get("field_name"), decision.get("candidate_id")
-            item = candidate_index.get(name, {}).get(candidate_id)
-            if item is None:
-                item = self._grounded_candidate(decision, pages or [], doc_type)
+            name = decision.get("field_name")
+            item = self._grounded_candidate(decision, pages or [], doc_type)
             if item is None:
                 continue
             current = resolved.get(name, {})
             if current.get("value") is not None and current.get("value") != item.get("value"):
-                resolved[name] = self._conflict(current, item, candidates.get(name, []))
-                conflicts.append(name)
-                continue
+                overrides.append(str(name))
             chosen = dict(item)
             reason_code = str(decision.get("reason_code", ""))
             if reason_code not in _REASON_CODES.get(name, set()):
-                reason_code = "MODEL_SELECTED_CANDIDATE"
+                reason_code = "MODEL_EXTRACTED_GROUNDED_VALUE"
             chosen.update(
                 {
                     "status": "FOUND",
-                    # Model confidence is not calibrated. Preserve deterministic evidence score.
+                    # The model confidence is ignored; acceptance requires exact OCR grounding.
                     "reason_code": reason_code,
                     "reasoning_engine": "qwen3-vl-8b",
                     "verification_status": "VERIFIED",
@@ -201,43 +124,9 @@ class FieldReasoningService:
             "resolved_fields": applied,
             "context_pages": [page["page_number"] for page in document_context],
             "visual_pages": [item["page_number"] for item in images],
-            "conflicts": conflicts,
+            "overrides": overrides,
+            "conflicts": [],
             "error": reply.get("error"),
-        }
-
-    @staticmethod
-    def _needs_visual_verification(
-        name: str, field: dict[str, Any], candidates: dict[str, list[dict[str, Any]]]
-    ) -> bool:
-        # Invoice/date confidence becomes high only after an independent visual check.
-        if field.get("value") is not None:
-            return True
-        if field.get("status") != "FOUND" or field.get("candidate_only"):
-            return True
-        if name == "transaction_date" and field.get("date_role") != "issue_date":
-            return True
-        if field.get("extraction_method") == "context_label_value":
-            return True
-        return len({str(item.get("value")) for item in candidates.get(name, [])}) > 1
-
-    @staticmethod
-    def _conflict(
-        current: dict[str, Any], visual: dict[str, Any], candidates: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        return {
-            "value": None,
-            "raw_value": None,
-            "confidence": 0.0,
-            "score": 0.0,
-            "status": "NOT_FOUND",
-            "reason_code": "DETERMINISTIC_VISUAL_CONFLICT",
-            "verification_status": "CONFLICT",
-            "manual_review_required": True,
-            "candidate_count": len(candidates),
-            "alternatives": [
-                {"value": current.get("value"), "source_text": current.get("source_text")},
-                {"value": visual.get("value"), "source_text": visual.get("source_text")},
-            ],
         }
 
     @staticmethod
@@ -295,7 +184,7 @@ class FieldReasoningService:
         evidence_quote = decision.get("evidence_quote")
         page_number = decision.get("page_number")
         if (
-            name not in _CORE_SELECTION_FIELDS
+            name not in _VISUAL_FIELDS
             or not isinstance(raw_value, str)
             or not isinstance(evidence_quote, str)
             or not isinstance(page_number, int)
@@ -305,7 +194,7 @@ class FieldReasoningService:
         page = pages[page_number - 1]
         if evidence_quote not in str(page.get("raw_text", "")):
             return None
-        item = self._field_extractor.build_grounded_candidate(name, raw_value, evidence_quote, doc_type)
+        item = self._field_extractor.build_grounded_field(name, raw_value, evidence_quote, doc_type)
         if item is None:
             return None
         item.update({"source_page_number": page_number, "source_page_index": page_number - 1})

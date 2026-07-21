@@ -193,6 +193,20 @@ def test_preserves_spaced_numeric_invoice_prefix_and_ignores_tax_invoice_identif
     assert not any(item["raw_value"] == "04002600142617401" for item in candidates.get("transaction_amount", []))
 
 
+def test_visual_grounding_accepts_unknown_commercial_label_but_rejects_po() -> None:
+    service = FieldExtractionService()
+
+    invoice = service.build_grounded_field(
+        "document_number", "ZX_#-2026", "Commercial Ref => ZX_#-2026", "INV"
+    )
+    purchase_order = service.build_grounded_field(
+        "document_number", "4500397235", "PO Number: 4500397235", "INV"
+    )
+
+    assert invoice is not None and invoice["value"] == "ZX_#-2026"
+    assert purchase_order is None
+
+
 def test_extracts_spaced_invoice_id_without_colon() -> None:
     fields = FieldExtractionService().extract_from_ocr({"raw_text": "Invoice Reference RI / 2301 - A77"})
 

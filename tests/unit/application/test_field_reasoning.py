@@ -37,7 +37,7 @@ def _invoice_candidates() -> dict:
     }
 
 
-def test_strong_single_source_field_is_not_sent_to_visual_model(monkeypatch) -> None:
+def test_strong_single_source_field_is_kept_when_visual_page_is_unavailable(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter()
     candidates = {
@@ -54,21 +54,22 @@ def test_strong_single_source_field_is_not_sent_to_visual_model(monkeypatch) -> 
     assert audit["engine"] == "deterministic"
 
 
-def test_visual_model_verifies_ambiguous_invoice_with_page_image(monkeypatch) -> None:
+def test_visual_model_extracts_invoice_directly_without_candidate_gating(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
         [
             {
                 "field_name": "document_number",
-                "candidate_id": "document_number-0",
+                "page_number": 1,
+                "raw_value": "INV-22",
+                "evidence_quote": "Invoice Number: INV-22",
                 "reason_code": "COMMERCIAL_DOCUMENT_NUMBER",
             }
         ]
     )
-    candidates = _invoice_candidates()
     pages = [{"raw_text": "Invoice Number: INV-22\nPO Number: PO-22"}]
 
-    resolved, audit = asyncio.run(FieldReasoningService(adapter).resolve(candidates, "INV", pages, [b"page-image"]))
+    resolved, audit = asyncio.run(FieldReasoningService(adapter).resolve({}, "INV", pages, [b"page-image"]))
 
     assert resolved["document_number"]["value"] == "INV-22"
     assert resolved["document_number"]["verification_status"] == "VERIFIED"
@@ -77,15 +78,18 @@ def test_visual_model_verifies_ambiguous_invoice_with_page_image(monkeypatch) ->
     assert audit["visual_pages"] == [1]
     assert adapter.request["requested_fields"] == ["document_number", "transaction_date"]
     assert adapter.request["images"][0]["page_number"] == 1
+    assert "candidates" not in adapter.request
 
 
-def test_visual_conflict_never_overwrites_a_strong_invoice(monkeypatch) -> None:
+def test_grounded_visual_value_overrides_a_wrong_deterministic_invoice(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
         [
             {
                 "field_name": "document_number",
-                "candidate_id": "document_number-1",
+                "page_number": 1,
+                "raw_value": "INV-999",
+                "evidence_quote": "Invoice Number: INV-999",
                 "reason_code": "COMMERCIAL_DOCUMENT_NUMBER",
             }
         ]
@@ -93,15 +97,20 @@ def test_visual_conflict_never_overwrites_a_strong_invoice(monkeypatch) -> None:
     candidates = _invoice_candidates()
 
     resolved, audit = asyncio.run(
-        FieldReasoningService(adapter).resolve(candidates, "INV", [{"raw_text": "x"}], [b"page-image"])
+        FieldReasoningService(adapter).resolve(
+            candidates,
+            "INV",
+            [{"raw_text": "Invoice Number: INV-999\nPO Number: INV-22"}],
+            [b"page-image"],
+        )
     )
 
-    assert resolved["document_number"]["status"] == "NOT_FOUND"
-    assert resolved["document_number"]["reason_code"] == "DETERMINISTIC_VISUAL_CONFLICT"
-    assert audit["conflicts"] == ["document_number"]
+    assert resolved["document_number"]["value"] == "INV-999"
+    assert resolved["document_number"]["verification_status"] == "VERIFIED"
+    assert audit["overrides"] == ["document_number"]
 
 
-def test_generic_date_is_not_sent_as_an_issue_date_candidate(monkeypatch) -> None:
+def test_visual_model_can_confirm_a_generic_date_as_the_issue_date(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
         [{
@@ -125,7 +134,8 @@ def test_generic_date_is_not_sent_as_an_issue_date_candidate(monkeypatch) -> Non
         )
     )
 
-    assert resolved["transaction_date"]["status"] == "NOT_FOUND"
+    assert resolved["transaction_date"]["value"] == "2023-10-31"
+    assert resolved["transaction_date"]["verification_status"] == "VERIFIED"
 
 
 def test_visual_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
@@ -134,7 +144,9 @@ def test_visual_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
         [
             {
                 "field_name": "transaction_date",
-                "candidate_id": "transaction_date-0",
+                "page_number": 1,
+                "raw_value": "01 April 2026",
+                "evidence_quote": "Cibitung,\n01 April 2026",
                 "reason_code": "DOCUMENT_ISSUE_DATE",
             }
         ]
@@ -156,9 +168,31 @@ def test_visual_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
         FieldReasoningService(adapter).resolve(candidates, "INV", [{"raw_text": "Cibitung,\n01 April 2026"}], [b"page"])
     )
 
-    assert adapter.request["candidates"]["transaction_date"][0]["value"] == "2026-04-01"
+    assert "candidates" not in adapter.request
     assert resolved["transaction_date"]["value"] == "2026-04-01"
     assert resolved["transaction_date"]["verification_status"] == "VERIFIED"
+
+
+def test_visual_model_cannot_relabel_due_date_as_issue_date(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = VisualAdapter(
+        [
+            {
+                "field_name": "transaction_date",
+                "page_number": 1,
+                "raw_value": "31/10/2023",
+                "evidence_quote": "Due Date: 31/10/2023",
+                "reason_code": "DOCUMENT_ISSUE_DATE",
+            }
+        ]
+    )
+
+    resolved, audit = asyncio.run(
+        FieldReasoningService(adapter).resolve({}, "INV", [{"raw_text": "Due Date: 31/10/2023"}], [b"page"])
+    )
+
+    assert resolved["transaction_date"]["status"] == "NOT_FOUND"
+    assert not audit["used"]
 
 
 def test_invalid_visual_response_keeps_strong_deterministic_evidence(monkeypatch) -> None:

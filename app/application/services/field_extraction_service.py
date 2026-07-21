@@ -245,7 +245,7 @@ class FieldExtractionService:
     def resolve_document_candidates(self, candidates: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
         return {name: self._resolve(name, items) for name, items in candidates.items()}
 
-    def build_grounded_candidate(
+    def build_grounded_field(
         self,
         name: str,
         raw_value: str,
@@ -265,10 +265,13 @@ class FieldExtractionService:
 
         extra: dict[str, Any] = {}
         if name == "document_number":
-            labels = self._context_labels(evidence_quote)
-            if not self._allowed(name, self._normal(evidence_quote), doc_type) or not any(
-                field_name == name and score >= _CONTEXT_LABEL_MIN_SCORE for field_name, _, score in labels
-            ):
+            normalized_evidence = self._normal(evidence_quote)
+            forbidden_label = re.match(
+                r"(?i)^\s*(?:po|purchase order|nomor po|no po|customer id|customer number|"
+                r"kode pelanggan|tax id|npwp)\b",
+                normalized_evidence,
+            )
+            if not self._allowed(name, normalized_evidence, doc_type) or forbidden_label:
                 return None
         if name == "transaction_amount":
             role_data = self._financial_role(evidence_quote)
@@ -280,7 +283,7 @@ class FieldExtractionService:
             }
         if name == "transaction_date":
             role_data = self._date_role(evidence_quote)
-            if role_data is None or role_data[1] != "issue_date":
+            if role_data is not None and role_data[1] in {"due_date", "payment_date", "print_date", "tax_period"}:
                 return None
             extra["date_role"] = "issue_date"
 
@@ -999,7 +1002,8 @@ class FieldExtractionService:
                 return None
             value = re.sub(r"(?i)^\s*(?:no\.?|number|nomor|id|code|reference|ref)\s*[:#\-]?\s*", "", value)
             normalized = self._normalize_document_number(value)
-            if re.fullmatch(r"(?i)[A-Z0-9][A-Z0-9 /.\-]*\d[A-Z0-9 /.\-]*", normalized):
+            document_number = re.fullmatch(r"(?i)[A-Z0-9][A-Z0-9 _/#.()\-]*\d[A-Z0-9 _/#.()\-]*", normalized)
+            if len(normalized) <= 80 and document_number:
                 return normalized
             matches = _NUMBER_RE.findall(normalized)
             return max(matches, key=len) if matches else None
@@ -1013,7 +1017,7 @@ class FieldExtractionService:
 
     @staticmethod
     def _normalize_document_number(value: str) -> str:
-        value = re.sub(r"\s*([/.\-])\s*", r"\1", value.strip())
+        value = re.sub(r"\s*([/._\-])\s*", r"\1", value.strip())
         return re.sub(r"\s+", " ", value)
 
     @staticmethod
