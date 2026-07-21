@@ -20,3 +20,6 @@ tests/test_invoice*.jpg
 tests/test_pdf.pdf
 artifacts/results/*
 !artifacts/results/.gitkeep
+.codex/
+.commandcode/
+.agents/
