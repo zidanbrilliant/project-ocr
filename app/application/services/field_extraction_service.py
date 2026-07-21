@@ -84,6 +84,7 @@ _NON_PAYABLE_ROLES = {
 _NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period", "unlabelled"}
 _CONTEXT_FIELDS = {"document_number", "transaction_amount", "billing_number"}
 _CONTEXT_LABEL_MIN_SCORE = 0.9
+_CONTEXT_LABEL_MIN_SCORE = 0.9
 
 
 def _valid_bbox(value: Any) -> bool:
@@ -164,6 +165,8 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
         ("dn number", 0.9),
         ("no sj", 0.9),
         ("nomor sj", 0.9),
+        ("no", 0.78),
+        ("nomor", 0.7),
         ("invoice", 0.85),
         ("receipt", 0.82),
     ),
@@ -461,7 +464,66 @@ class FieldExtractionService:
 
         self._add_bidirectional_context_candidates(candidates, lines, doc_type)
 
+        if tokens and all(
+            token.get("coordinate_space") != "pdf_points" for token in tokens if "coordinate_space" in token
+        ):
+            self._pair_nemotron_split_financials(candidates, lines)
+
         return {name: self._deduplicate(items) for name, items in candidates.items()}
+
+    def _pair_nemotron_split_financials(
+        self,
+        candidates: dict[str, list[dict[str, Any]]],
+        lines: list[tuple[str, Any, str]],
+    ) -> None:
+        for val_index, (val_text, val_bbox, val_block_id) in enumerate(lines):
+            currency_match = _CURRENCY_RE.search(val_text)
+            money_match = _MONEY_RE.search(val_text)
+            if currency_match:
+                amount_raw = currency_match.group("prefix_amount") or currency_match.group("suffix_amount")
+            elif money_match:
+                amount_raw = money_match.group(1)
+            else:
+                continue
+            if not amount_raw:
+                continue
+            parsed = MoneyAmount.parse_rupiah(amount_raw)
+            if parsed is None:
+                continue
+            if any(
+                item.get("extraction_method") == "nemotron_split_financial"
+                and item.get("raw_value") == amount_raw
+                for item in candidates.get("transaction_amount", [])
+            ):
+                continue
+            for distance in (1, 2, 3, 4, 5):
+                label_index = val_index - distance
+                if label_index < 0:
+                    break
+                label_text = lines[label_index][0]
+                if not self._y_aligned(val_bbox, lines[label_index][1], 50):
+                    continue
+                role_data = self._financial_role(label_text)
+                if role_data is None:
+                    continue
+                role, label, score = role_data
+                currency = self._currency(val_text) or "IDR"
+                self._add(
+                    candidates,
+                    "transaction_amount",
+                    parsed.value,
+                    score,
+                    val_bbox,
+                    "nemotron_split_financial",
+                    val_text,
+                    source_label=label,
+                    raw_value=amount_raw,
+                    source_block_id=val_block_id,
+                    amount_role=role,
+                    currency=currency,
+                    candidate_only=label == "total",
+                )
+                break
 
     def _add_bidirectional_context_candidates(
         self,
@@ -700,6 +762,10 @@ class FieldExtractionService:
                 line,
             )
             or re.search(r"(?i)\b((?:INV|FAK|NOTA|RCP|DOC|BILL|KW|TRX|PO|SO|DO|ORD|SJ|DN)[\s/\-]*[0-9][A-Z0-9/.\-]*)", line)
+            or re.search(
+                r"(?i)^\s*(?:no\.?|nomor)\s*[:#\-]?\s*" + _DOCUMENT_NUMBER_VALUE,
+                line,
+            )
         )
         if match:
             raw_value = match.group(1)
@@ -1200,6 +1266,18 @@ class FieldExtractionService:
             "tunjangan": "tunjangan",
         }
         return " ".join(replacements.get(word, word) for word in normalized.split())
+
+    @staticmethod
+    def _y_aligned(label_bbox: Any, value_bbox: Any, tolerance: float = 60) -> bool:
+        if label_bbox is None or value_bbox is None:
+            return True
+        if not isinstance(label_bbox, (list, tuple)) or len(label_bbox) != 4:
+            return True
+        if not isinstance(value_bbox, (list, tuple)) or len(value_bbox) != 4:
+            return True
+        ly1, ly2 = label_bbox[1], label_bbox[3]
+        vy1, vy2 = value_bbox[1], value_bbox[3]
+        return abs(ly1 - vy1) <= tolerance or abs(ly2 - vy2) <= tolerance
 
     @staticmethod
     def _spatially_related(label_bbox: Any, value_bbox: Any) -> bool:
