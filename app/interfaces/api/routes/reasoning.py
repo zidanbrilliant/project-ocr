@@ -17,7 +17,7 @@ async def warmup_reasoning() -> None:
 async def health() -> dict[str, Any]:
     if not _adapter.is_available:
         raise HTTPException(status_code=503, detail=_adapter.load_error or "reasoning_not_ready")
-    return {"ready": _adapter.is_available, "engine": "qwen3-vl-8b", "error": _adapter.load_error}
+    return {"ready": _adapter.is_available, "engine": "qwen3.5-9b", "error": _adapter.load_error}
 
 
 @router.post("/select")

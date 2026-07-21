@@ -360,7 +360,6 @@ class AIPipelineOrchestrator:
             ocr_results: list[dict] = []
             barcode_results: list[dict] = []
             raw_detections: list[dict[str, Any]] = []
-            visual_page_images: list[bytes] = []
             native_pages = self._ocr_engine.extract_pdf_pages(file_content) if ext == ".pdf" else []
             batches = (
                 self._pdf_renderer.iter_batches(file_content, settings.PAGE_MICRO_BATCH_SIZE)
@@ -371,7 +370,6 @@ class AIPipelineOrchestrator:
             page_offset = 0
 
             for batch in batches:
-                visual_page_images.extend(batch)
                 if quality_image is None and batch:
                     quality_image = batch[0]
                 batch_detections = await self._yolo.detect_batch(batch)
@@ -481,9 +479,7 @@ class AIPipelineOrchestrator:
 
             # Extract fields
             candidates = self._field_extractor.collect_document_candidates(ocr_results, doc.document_type)
-            fields, reasoning = await self._field_reasoning.resolve(
-                candidates, doc.document_type, ocr_results, visual_page_images
-            )
+            fields, reasoning = await self._field_reasoning.resolve(candidates, doc.document_type, ocr_results)
             result.financials = self._field_extractor.build_financials(candidates, fields)
             ocr_aggregated.update(
                 {

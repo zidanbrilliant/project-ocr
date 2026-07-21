@@ -35,7 +35,7 @@ def test_chat_prompt_disables_qwen_thinking() -> None:
     assert _chat_prompt(Tokenizer(), []) == "prompt"
 
 
-def test_visual_payload_is_normalized_to_field_decisions() -> None:
+def test_text_payload_is_normalized_to_field_decisions() -> None:
     payload = _decisions(
         {
             "document_number": {

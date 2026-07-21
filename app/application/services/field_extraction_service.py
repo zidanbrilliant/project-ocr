@@ -496,7 +496,15 @@ class FieldExtractionService:
         distance: int,
         doc_type: str | None,
     ) -> None:
-        candidate_text = self._without_label(value_text, label) if relation == "same_line" else value_text
+        split_label, split_value = self._split_label_value(value_text)
+        candidate_text = (
+            split_value
+            if relation == "same_line" and split_label and split_value
+            else self._without_label(value_text, label)
+            if relation == "same_line"
+            else value_text
+        )
+        candidate_text = candidate_text.lstrip(" \t:=#-")
         parsed = self._parse(name, candidate_text)
         if parsed is None:
             return

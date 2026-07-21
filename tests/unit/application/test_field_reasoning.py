@@ -37,7 +37,7 @@ def _invoice_candidates() -> dict:
     }
 
 
-def test_strong_single_source_field_is_kept_when_visual_page_is_unavailable(monkeypatch) -> None:
+def test_strong_single_source_field_is_kept_when_ocr_context_is_unavailable(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter()
     candidates = {
@@ -54,7 +54,7 @@ def test_strong_single_source_field_is_kept_when_visual_page_is_unavailable(monk
     assert audit["engine"] == "deterministic"
 
 
-def test_visual_model_extracts_invoice_directly_without_candidate_gating(monkeypatch) -> None:
+def test_text_model_extracts_invoice_directly_without_candidate_gating(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
         [
@@ -69,19 +69,19 @@ def test_visual_model_extracts_invoice_directly_without_candidate_gating(monkeyp
     )
     pages = [{"raw_text": "Invoice Number: INV-22\nPO Number: PO-22"}]
 
-    resolved, audit = asyncio.run(FieldReasoningService(adapter).resolve({}, "INV", pages, [b"page-image"]))
+    resolved, audit = asyncio.run(FieldReasoningService(adapter).resolve({}, "INV", pages))
 
     assert resolved["document_number"]["value"] == "INV-22"
     assert resolved["document_number"]["verification_status"] == "VERIFIED"
     assert resolved["document_number"]["independent_evidence_count"] == 2
-    assert audit["engine"] == "qwen3-vl-8b"
-    assert audit["visual_pages"] == [1]
+    assert audit["engine"] == "qwen3.5-9b"
+    assert audit["visual_pages"] == []
     assert adapter.request["requested_fields"] == ["document_number", "transaction_date"]
-    assert adapter.request["images"][0]["page_number"] == 1
+    assert "images" not in adapter.request
     assert "candidates" not in adapter.request
 
 
-def test_grounded_visual_value_overrides_a_wrong_deterministic_invoice(monkeypatch) -> None:
+def test_grounded_text_value_overrides_a_wrong_deterministic_invoice(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
         [
@@ -101,7 +101,6 @@ def test_grounded_visual_value_overrides_a_wrong_deterministic_invoice(monkeypat
             candidates,
             "INV",
             [{"raw_text": "Invoice Number: INV-999\nPO Number: INV-22"}],
-            [b"page-image"],
         )
     )
 
@@ -110,7 +109,7 @@ def test_grounded_visual_value_overrides_a_wrong_deterministic_invoice(monkeypat
     assert audit["overrides"] == ["document_number"]
 
 
-def test_visual_model_can_confirm_a_generic_date_as_the_issue_date(monkeypatch) -> None:
+def test_text_model_can_confirm_a_generic_date_as_the_issue_date(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
         [{
@@ -130,7 +129,6 @@ def test_visual_model_can_confirm_a_generic_date_as_the_issue_date(monkeypatch) 
             },
             "INV",
             [{"raw_text": "Date: 31/10/2023"}],
-            [b"page-image"],
         )
     )
 
@@ -138,7 +136,7 @@ def test_visual_model_can_confirm_a_generic_date_as_the_issue_date(monkeypatch) 
     assert resolved["transaction_date"]["verification_status"] == "VERIFIED"
 
 
-def test_visual_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
+def test_text_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
         [
@@ -165,7 +163,7 @@ def test_visual_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
     }
 
     resolved, _ = asyncio.run(
-        FieldReasoningService(adapter).resolve(candidates, "INV", [{"raw_text": "Cibitung,\n01 April 2026"}], [b"page"])
+        FieldReasoningService(adapter).resolve(candidates, "INV", [{"raw_text": "Cibitung,\n01 April 2026"}])
     )
 
     assert "candidates" not in adapter.request
@@ -173,7 +171,7 @@ def test_visual_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
     assert resolved["transaction_date"]["verification_status"] == "VERIFIED"
 
 
-def test_visual_model_cannot_relabel_due_date_as_issue_date(monkeypatch) -> None:
+def test_text_model_cannot_relabel_due_date_as_issue_date(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
         [
@@ -188,14 +186,14 @@ def test_visual_model_cannot_relabel_due_date_as_issue_date(monkeypatch) -> None
     )
 
     resolved, audit = asyncio.run(
-        FieldReasoningService(adapter).resolve({}, "INV", [{"raw_text": "Due Date: 31/10/2023"}], [b"page"])
+        FieldReasoningService(adapter).resolve({}, "INV", [{"raw_text": "Due Date: 31/10/2023"}])
     )
 
     assert resolved["transaction_date"]["status"] == "NOT_FOUND"
     assert not audit["used"]
 
 
-def test_invalid_visual_response_keeps_strong_deterministic_evidence(monkeypatch) -> None:
+def test_invalid_text_response_keeps_strong_deterministic_evidence(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
 
     class InvalidAdapter(VisualAdapter):
@@ -204,7 +202,7 @@ def test_invalid_visual_response_keeps_strong_deterministic_evidence(monkeypatch
 
     candidates = _invoice_candidates()
     resolved, audit = asyncio.run(
-        FieldReasoningService(InvalidAdapter()).resolve(candidates, "INV", [{"raw_text": "x"}], [b"page-image"])
+        FieldReasoningService(InvalidAdapter()).resolve(candidates, "INV", [{"raw_text": "x"}])
     )
 
     assert resolved["document_number"]["value"] == "INV-22"

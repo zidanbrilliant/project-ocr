@@ -126,9 +126,9 @@ def _render_model_status(processor: DirectProcessor) -> None:
 
     reasoning = processor._field_reasoning
     if reasoning.is_available:
-        st.success("Qwen3-VL-8B verification: ready")
+        st.success("Qwen3.5-9B extraction: ready")
     else:
-        st.warning(f"Qwen3-VL-8B verification: not loaded ({reasoning.load_error or 'warmup pending'})")
+        st.warning(f"Qwen3.5-9B extraction: not loaded ({reasoning.load_error or 'warmup pending'})")
 
     yolo_loaded = getattr(processor._yolo, "_loaded", False)
     if yolo_loaded:

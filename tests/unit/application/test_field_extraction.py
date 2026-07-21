@@ -189,7 +189,8 @@ def test_preserves_spaced_numeric_invoice_prefix_and_ignores_tax_invoice_identif
         [{"raw_text": "No. Invoice : 030 NTC0426\nFaktur Pajak 04002600142617401"}], "INV"
     )
 
-    assert candidates["document_number"][0]["value"] == "030 NTC0426"
+    assert [item["value"] for item in candidates["document_number"]] == ["030 NTC0426"]
+    assert service.resolve_document_candidates(candidates)["document_number"]["status"] == "FOUND"
     assert not any(item["raw_value"] == "04002600142617401" for item in candidates.get("transaction_amount", []))
 
 

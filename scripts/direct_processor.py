@@ -262,7 +262,7 @@ class DirectProcessor:
             result["barcode"] = barcode_raw
 
             candidates = self._field_extractor.collect_document_candidates(page_ocrs, doc_type)
-            fields, reasoning = await self._field_reasoning.resolve(candidates, doc_type, page_ocrs, page_images)
+            fields, reasoning = await self._field_reasoning.resolve(candidates, doc_type, page_ocrs)
             result["fields"] = fields
             result["financials"] = self._field_extractor.build_financials(candidates, fields)
             build_audit = getattr(self._field_extractor, "build_candidate_audit", None)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 from typing import Any
 
 from app.application.services.field_extraction_service import FieldExtractionService
@@ -19,13 +18,12 @@ _REASON_CODES = {
     "transaction_date": {"DOCUMENT_ISSUE_DATE"},
 }
 _CORE_SELECTION_FIELDS = {"document_number", "transaction_amount", "transaction_date"}
-_VISUAL_FIELDS = ("document_number", "transaction_date")
-_MAX_VISUAL_CONTEXT_CHARS = 12_000
-_MAX_VISUAL_PAGES = 2
+_TEXT_FIELDS = ("document_number", "transaction_date")
+_MAX_TEXT_CONTEXT_CHARS = 12_000
 
 
 class FieldReasoningService:
-    """Extract invoice/date visually, with a deterministic fallback when Qwen is unavailable."""
+    """Extract invoice/date from OCR, with a deterministic fallback when Qwen is unavailable."""
 
     def __init__(
         self,
@@ -51,20 +49,12 @@ class FieldReasoningService:
         candidates: dict[str, list[dict[str, Any]]],
         doc_type: str,
         pages: list[dict[str, Any]] | None = None,
-        page_images: list[bytes] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
         fields = self._field_extractor.resolve_document_candidates(candidates)
         resolved = self._strict_core_fallback(fields, candidates)
-        visual_fields = list(_VISUAL_FIELDS)
+        text_fields = list(_TEXT_FIELDS)
         if not settings.REASONING_ENABLED:
             return resolved, {"enabled": settings.REASONING_ENABLED, "used": False, "engine": "deterministic"}
-        if not page_images:
-            return resolved, {
-                "enabled": True,
-                "used": False,
-                "engine": "deterministic",
-                "error": "visual_pages_unavailable",
-            }
         if not self._adapter.is_available:
             return resolved, {
                 "enabled": True,
@@ -73,18 +63,16 @@ class FieldReasoningService:
                 "error": self._adapter.load_error or "reasoning_not_ready",
             }
 
-        document_context = self._document_context(pages or [], candidates, visual_fields)
-        images = self._visual_images(page_images or [], document_context)
-        if not document_context or not images:
+        document_context = self._document_context(pages or [], candidates, text_fields)
+        if not document_context:
             return resolved, {"enabled": True, "used": False, "engine": "deterministic"}
 
         reply = await self._adapter.select(
             {
                 "document_type": doc_type,
-                "requested_fields": visual_fields,
+                "requested_fields": text_fields,
                 "field_definitions": _FIELD_DEFINITIONS,
                 "page_ocr": document_context,
-                "images": images,
             }
         )
         applied: list[str] = []
@@ -108,7 +96,7 @@ class FieldReasoningService:
                     "status": "FOUND",
                     # The model confidence is ignored; acceptance requires exact OCR grounding.
                     "reason_code": reason_code,
-                    "reasoning_engine": "qwen3-vl-8b",
+                    "reasoning_engine": "qwen3.5-9b",
                     "verification_status": "VERIFIED",
                     "independent_evidence_count": 2,
                     "confidence": max(float(chosen.get("confidence", 0.0)), 0.9),
@@ -120,10 +108,10 @@ class FieldReasoningService:
         return resolved, {
             "enabled": True,
             "used": bool(applied),
-            "engine": "qwen3-vl-8b",
+            "engine": "qwen3.5-9b",
             "resolved_fields": applied,
             "context_pages": [page["page_number"] for page in document_context],
-            "visual_pages": [item["page_number"] for item in images],
+            "visual_pages": [],
             "overrides": overrides,
             "conflicts": [],
             "error": reply.get("error"),
@@ -148,7 +136,7 @@ class FieldReasoningService:
                 or (name == "transaction_date" and field.get("date_role") == "issue_date" and confidence >= 0.9)
             )
             if keep:
-                single_source = name in _VISUAL_FIELDS
+                single_source = name in _TEXT_FIELDS
                 resolved[name] = {
                     **field,
                     "confidence": min(confidence, 0.84) if single_source else confidence,
@@ -184,7 +172,7 @@ class FieldReasoningService:
         evidence_quote = decision.get("evidence_quote")
         page_number = decision.get("page_number")
         if (
-            name not in _VISUAL_FIELDS
+            name not in _TEXT_FIELDS
             or not isinstance(raw_value, str)
             or not isinstance(evidence_quote, str)
             or not isinstance(page_number, int)
@@ -210,13 +198,13 @@ class FieldReasoningService:
     def _document_context(
         pages: list[dict[str, Any]],
         candidates: dict[str, list[dict[str, Any]]],
-        visual_fields: list[str] | None = None,
+        text_fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         if not pages:
             return []
-        visual_fields = visual_fields or list(_VISUAL_FIELDS)
+        text_fields = text_fields or list(_TEXT_FIELDS)
         priority: dict[int, float] = {1: 1.0, len(pages): 0.9}
-        for name in visual_fields:
+        for name in text_fields:
             for item in candidates.get(name, []):
                 page_number = int(item.get("source_page_number") or 0)
                 if 1 <= page_number <= len(pages):
@@ -226,7 +214,7 @@ class FieldReasoningService:
         remaining_pages = [page_number for page_number in range(1, len(pages) + 1) if page_number not in priority]
         ordered_pages = prioritized + remaining_pages
         context: dict[int, str] = {}
-        remaining = _MAX_VISUAL_CONTEXT_CHARS
+        remaining = _MAX_TEXT_CONTEXT_CHARS
         for page_number in ordered_pages:
             raw_text = str(pages[page_number - 1].get("raw_text", "")).strip()
             if not raw_text or remaining <= 0:
@@ -238,20 +226,6 @@ class FieldReasoningService:
             for page_number in ordered_pages
             if page_number in context
         ]
-
-    @staticmethod
-    def _visual_images(page_images: list[bytes], context_pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        images: list[dict[str, Any]] = []
-        for page in context_pages[:_MAX_VISUAL_PAGES]:
-            page_number = int(page["page_number"])
-            if 1 <= page_number <= len(page_images) and page_images[page_number - 1]:
-                images.append(
-                    {
-                        "page_number": page_number,
-                        "image_b64": base64.b64encode(page_images[page_number - 1]).decode("ascii"),
-                    }
-                )
-        return images
 
     async def summarize(
         self, document_result: str, fields: dict[str, dict[str, Any]], failed_rules: list[dict[str, Any]]

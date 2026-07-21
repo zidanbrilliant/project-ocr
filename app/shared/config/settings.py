@@ -75,11 +75,10 @@ class Settings(BaseSettings):
     NEMOTRON_MODEL_DIR: str = "/mnt/models/Nemotron-Parse-v1.2"
     NEMOTRON_SERVICE_URL: str = ""
     REASONING_ENABLED: bool = True
-    REASONING_MODEL_DIR: str = "/mnt/models/Qwen3-VL-8B"
+    REASONING_MODEL_DIR: str = "/mnt/models/Qwen3.5-9B"
     REASONING_SERVICE_URL: str = ""
     REASONING_TIMEOUT_SECONDS: int = 60
     REASONING_MAX_OUTPUT_TOKENS: int = 128
-    VLM_MAX_LONG_EDGE: int = 1600
     TEST_RESULT_DIR: str = "artifacts/results"
 
     API_AUTH_MODE: Literal["api_key", "jwt", "none"] = "api_key"
