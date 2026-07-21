@@ -94,6 +94,11 @@ def _union_bbox(boxes: list[Any]) -> list[float]:
         max(float(box[3]) for box in boxes),
     ]
 
+
+def _ocr_contains(text: str, value: str) -> bool:
+    normalized_value = re.sub(r"[^0-9a-z]+", "", value.casefold())
+    return bool(normalized_value) and normalized_value in re.sub(r"[^0-9a-z]+", "", text.casefold())
+
 # Order matters: the first matching amount label is the intended business role.
 _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
     "document_number": (
@@ -256,7 +261,7 @@ class FieldExtractionService:
         if (
             name not in {"document_number", "transaction_amount", "transaction_date"}
             or not raw_value.strip()
-            or raw_value not in evidence_quote
+            or not _ocr_contains(evidence_quote, raw_value)
         ):
             return None
         parsed = self._parse(name, raw_value)

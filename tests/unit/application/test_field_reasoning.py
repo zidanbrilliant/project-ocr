@@ -37,7 +37,7 @@ def _invoice_candidates() -> dict:
     }
 
 
-def test_strong_single_source_field_is_kept_when_ocr_context_is_unavailable(monkeypatch) -> None:
+def test_deterministic_fallback_remains_visible_when_ocr_context_is_unavailable(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter()
     candidates = {
@@ -48,7 +48,8 @@ def test_strong_single_source_field_is_kept_when_ocr_context_is_unavailable(monk
 
     resolved, audit = asyncio.run(FieldReasoningService(adapter).resolve(candidates, "INV"))
 
-    assert resolved["document_number"]["verification_status"] == "SINGLE_SOURCE"
+    assert resolved["document_number"]["verification_status"] == "FALLBACK_UNVERIFIED"
+    assert resolved["document_number"]["confidence"] == 0.99
     assert resolved["transaction_amount"]["status"] == "FOUND"
     assert adapter.request is None
     assert audit["engine"] == "deterministic"
@@ -193,7 +194,7 @@ def test_text_model_cannot_relabel_due_date_as_issue_date(monkeypatch) -> None:
     assert not audit["used"]
 
 
-def test_invalid_text_response_keeps_strong_deterministic_evidence(monkeypatch) -> None:
+def test_invalid_text_response_keeps_deterministic_evidence_visible(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
 
     class InvalidAdapter(VisualAdapter):
@@ -206,8 +207,40 @@ def test_invalid_text_response_keeps_strong_deterministic_evidence(monkeypatch) 
     )
 
     assert resolved["document_number"]["value"] == "INV-22"
-    assert resolved["document_number"]["verification_status"] == "SINGLE_SOURCE"
+    assert resolved["document_number"]["verification_status"] == "FALLBACK_UNVERIFIED"
     assert audit["error"] == "invalid_model_json"
+
+
+def test_text_model_receives_all_pages_in_document_order(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = VisualAdapter()
+    pages = [{"raw_text": "first"}, {"raw_text": "second" * 4_000}, {"raw_text": "third"}]
+
+    asyncio.run(FieldReasoningService(adapter).resolve(_invoice_candidates(), "INV", pages))
+
+    assert adapter.request["page_ocr"] == [
+        {"page_number": 1, "raw_text": "first"},
+        {"page_number": 2, "raw_text": "second" * 4_000},
+        {"page_number": 3, "raw_text": "third"},
+    ]
+
+
+def test_text_model_accepts_spacing_and_punctuation_variation_in_grounding(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = VisualAdapter(
+        [{
+            "field_name": "document_number",
+            "page_number": 1,
+            "raw_value": "INV - 22",
+            "evidence_quote": "Invoice Number : INV - 22",
+        }]
+    )
+
+    resolved, _ = asyncio.run(
+        FieldReasoningService(adapter).resolve({}, "INV", [{"raw_text": "Invoice Number:\nINV-22"}])
+    )
+
+    assert resolved["document_number"]["value"] == "INV-22"
 
 
 def test_summary_is_deterministic(monkeypatch) -> None:
