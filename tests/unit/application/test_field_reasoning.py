@@ -447,7 +447,7 @@ def test_reasoning_rejects_generic_date_and_hides_unselected_core_fields(monkeyp
     assert audit["used"] is False
 
 
-def test_reasoning_unavailable_never_returns_unreconciled_core_fields(monkeypatch) -> None:
+def test_reasoning_unavailable_keeps_only_strong_labelled_core_fields(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
 
     class UnavailableAdapter:
@@ -463,11 +463,53 @@ def test_reasoning_unavailable_never_returns_unreconciled_core_fields(monkeypatc
     resolved, audit = asyncio.run(FieldReasoningService(UnavailableAdapter()).resolve(candidates, "INV"))
 
     assert {name: field["status"] for name, field in resolved.items()} == {
-        "document_number": "NOT_FOUND",
-        "transaction_amount": "NOT_FOUND",
-        "transaction_date": "NOT_FOUND",
+        "document_number": "FOUND",
+        "transaction_amount": "FOUND",
+        "transaction_date": "FOUND",
     }
     assert audit["error"] == "model_not_loaded"
+
+
+def test_invalid_model_json_keeps_strong_evidence_and_rejects_weak_candidates(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class InvalidJsonAdapter:
+        is_available = True
+        load_error = None
+
+        async def select(self, request):
+            return {"error": "invalid_model_json", "decisions": []}
+
+    strong = {
+        "document_number": [{"value": "INV-1", "confidence": 0.99, "score": 0.99}],
+        "transaction_amount": [
+            {"value": 110.0, "confidence": 0.98, "score": 0.98, "amount_role": "final_total"}
+        ],
+        "transaction_date": [
+            {"value": "2026-01-01", "confidence": 0.9, "score": 0.9, "date_role": "issue_date"}
+        ],
+    }
+    resolved, audit = asyncio.run(FieldReasoningService(InvalidJsonAdapter()).resolve(strong, "INV"))
+
+    assert [resolved[name]["status"] for name in ("document_number", "transaction_amount", "transaction_date")] == [
+        "FOUND",
+        "FOUND",
+        "FOUND",
+    ]
+    assert audit["error"] == "invalid_model_json"
+
+    weak = {
+        "document_number": [{"value": "12345", "confidence": 0.8, "score": 0.8}],
+        "transaction_amount": [
+            {"value": 999.0, "confidence": 0.9, "score": 0.9, "amount_role": "unlabelled_currency"}
+        ],
+        "transaction_date": [
+            {"value": "2026-01-01", "confidence": 0.9, "score": 0.9, "date_role": "generic_date"}
+        ],
+    }
+    resolved, _ = asyncio.run(FieldReasoningService(InvalidJsonAdapter()).resolve(weak, "INV"))
+
+    assert all(field["status"] == "NOT_FOUND" for field in resolved.values())
 
 
 def test_reasoning_does_not_drop_candidates_after_twelve(monkeypatch) -> None:

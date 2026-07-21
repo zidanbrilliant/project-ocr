@@ -68,7 +68,7 @@ class FieldReasoningService:
         pages: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
         fields = self._field_extractor.resolve_document_candidates(candidates)
-        resolved = self._qwen_only_core_fields(fields, candidates)
+        resolved = self._strict_core_fallback(fields, candidates)
         selected: dict[str, list[dict[str, Any]]] = {}
         for name in set(candidates) | _CORE_SELECTION_FIELDS:
             items = candidates.get(name, [])
@@ -196,18 +196,24 @@ class FieldReasoningService:
         }
 
     @staticmethod
-    def _qwen_only_core_fields(
+    def _strict_core_fallback(
         fields: dict[str, dict[str, Any]], candidates: dict[str, list[dict[str, Any]]]
     ) -> dict[str, dict[str, Any]]:
-        """Keep only arithmetic-proof totals when Qwen has not selected a core field."""
+        """Keep only unambiguous, strongly labelled fields when Qwen fails."""
         resolved = dict(fields)
         for name in _CORE_SELECTION_FIELDS:
             field = fields.get(name, {})
-            if (
-                name == "transaction_amount"
-                and field.get("amount_role") == "final_total"
-                and str(field.get("validation", "")).startswith("RECONCILED")
-            ):
+            confidence = float(field.get("confidence", 0.0))
+            keep = field.get("status") == "FOUND" and not field.get("candidate_only") and (
+                (name == "document_number" and confidence >= 0.9)
+                or (
+                    name == "transaction_amount"
+                    and field.get("amount_role") == "final_total"
+                    and confidence >= 0.95
+                )
+                or (name == "transaction_date" and field.get("date_role") == "issue_date" and confidence >= 0.9)
+            )
+            if keep:
                 continue
             resolved[name] = {
                 "value": None,
