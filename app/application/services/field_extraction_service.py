@@ -291,13 +291,14 @@ class FieldExtractionService:
 
         extra: dict[str, Any] = {}
         if name == "document_number":
-            normalized_evidence = self._normal(evidence_quote)
+            label_part = self._extract_label_from_evidence(evidence_quote)
+            normalized_label = self._normal(label_part) if label_part else self._normal(evidence_quote)
             forbidden_label = re.match(
                 r"(?i)^\s*(?:po|purchase order|nomor po|no po|customer id|customer number|"
-                r"kode pelanggan|tax id|npwp)\b",
-                normalized_evidence,
+                r"kode pelanggan|tax id|npwp|npwp pembeli|npwp penjual)\b",
+                normalized_label,
             )
-            if not self._allowed(name, normalized_evidence, doc_type) or forbidden_label:
+            if not self._allowed(name, normalized_label, doc_type) or forbidden_label:
                 return None
         if name == "transaction_amount":
             role_data = self._financial_role(evidence_quote)
@@ -1059,6 +1060,14 @@ class FieldExtractionService:
             else:
                 expanded.append((line, bbox, block_id))
         return expanded
+
+    @staticmethod
+    def _extract_label_from_evidence(evidence_quote: str) -> str:
+        parts = FieldExtractionService._split_label_value(evidence_quote)
+        if parts[0] and parts[1]:
+            return parts[0]
+        tokens = re.split(r"(?<!\d)[\s:=-]+(?!\d)", evidence_quote, maxsplit=1)
+        return tokens[0] if len(tokens) > 1 else evidence_quote
 
     @staticmethod
     def _split_label_value(line: str) -> tuple[str | None, str | None]:
