@@ -13,7 +13,7 @@ _CURRENCY_RE = re.compile(
     r"(?i)(?:(?P<prefix>Rp\.?|IDR\.?|US\$|USD|S\$|SGD|A\$|AUD|C\$|CAD|NZ\$|NZD|HK\$|HKD|CN¥|CNY|RMB|EUR|\u20ac|GBP|\u00a3|JPY|\u00a5|KRW|\u20a9|INR|\u20b9|MYR|RM|THB|\u0e3f|PHP|\u20b1|VND|\u20ab|CHF|AED|SAR|R\$|BRL|ZAR|\$)\s*(?P<prefix_amount>[0-9][0-9.,]*)|(?P<suffix_amount>[0-9][0-9.,]*)\s*(?P<suffix>IDR|USD|SGD|AUD|CAD|NZD|HKD|CNY|RMB|EUR|GBP|JPY|KRW|INR|MYR|THB|PHP|VND|CHF|AED|SAR|BRL|ZAR))"
 )
 _DATE_RE = re.compile(
-    r"(?i)\b(?:\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}[./-](?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|okt|oct(?:ober)?|nov(?:ember)?|des|dec(?:ember)?|agt|peb)[./-]\d{2,4}|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|okt|oct(?:ober)?|nov(?:ember)?|des|dec(?:ember)?|agt|peb)\s+\d{2,4}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|okt|oct(?:ober)?|nov(?:ember)?|des|dec(?:ember)?|agt|peb)\s+\d{1,2},?\s+\d{2,4})\b"
+    r"(?i)\b(?:\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}[./-](?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|okt|oct(?:ober)?|nov(?:ember)?|nop|des|dec(?:ember)?|agt|peb)[./-]\d{2,4}|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|okt|oct(?:ober)?|nov(?:ember)?|nop|des|dec(?:ember)?|agt|peb)\s+\d{2,4}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|okt|oct(?:ober)?|nov(?:ember)?|nop|des|dec(?:ember)?|agt|peb)\s+\d{1,2},?\s+\d{2,4})\b"
 )
 _DATE_FORMATS = (
     "%d/%m/%Y",
@@ -156,6 +156,14 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
         ("ref no", 0.86),
         ("doc no", 0.88),
         ("faktur penjualan", 0.9),
+        ("no surat jalan", 0.92),
+        ("nomor surat jalan", 0.92),
+        ("delivery note no", 0.92),
+        ("delivery note number", 0.92),
+        ("dn no", 0.9),
+        ("dn number", 0.9),
+        ("no sj", 0.9),
+        ("nomor sj", 0.9),
         ("invoice", 0.85),
         ("receipt", 0.82),
     ),
@@ -218,6 +226,7 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
         ("total amount", 0.95),
         ("total amount due", 0.97),
         ("net amount", 0.95),
+        ("jumlah", 0.72),
         ("total", 0.75),
     ),
     "transaction_date": (
@@ -689,7 +698,7 @@ class FieldExtractionService:
                 + _DOCUMENT_NUMBER_VALUE,
                 line,
             )
-            or re.search(r"(?i)\b((?:INV|FAK|NOTA|RCP|DOC|BILL|KW|TRX|PO|SO|DO|ORD)[\s/\-]*[0-9][A-Z0-9/.\-]*)", line)
+            or re.search(r"(?i)\b((?:INV|FAK|NOTA|RCP|DOC|BILL|KW|TRX|PO|SO|DO|ORD|SJ|DN)[\s/\-]*[0-9][A-Z0-9/.\-]*)", line)
         )
         if match:
             raw_value = match.group(1)
@@ -740,7 +749,6 @@ class FieldExtractionService:
 
     def _financial_role(self, line: str) -> tuple[str, str, float] | None:
         normalized = self._normal_label(line)
-        # Specific non-payable labels must win before the generic final "total" label.
         for role, labels, score in _AMOUNT_ROLES:
             if role == "final_total":
                 continue
@@ -759,6 +767,8 @@ class FieldExtractionService:
         for label, score in _LABELS["transaction_amount"]:
             if normalized == label or normalized.startswith(f"{label} "):
                 return "final_total", label, min(score, 0.98)
+            if re.search(rf"(?:^|\s){re.escape(label)}(?:\s|$)", normalized):
+                return "final_total", label, min(score, 0.95)
         return None
 
     def _add_date_candidate(
