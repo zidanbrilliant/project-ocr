@@ -22,4 +22,6 @@ async def health() -> dict[str, Any]:
 
 @router.post("/select")
 async def select(request: dict[str, Any]) -> dict[str, Any]:
+    if not _adapter.is_available:
+        raise HTTPException(status_code=503, detail=_adapter.load_error or "reasoning_not_ready")
     return await _adapter.select(request)

@@ -28,7 +28,7 @@ services:
       nemotron:
         condition: service_healthy
       reasoning:
-        condition: service_started
+        condition: service_healthy
     deploy:
       resources:
         reservations:
@@ -151,7 +151,7 @@ services:
       nemotron:
         condition: service_healthy
       reasoning:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./models:/app/models:ro
       - /mnt/models:/mnt/models:ro

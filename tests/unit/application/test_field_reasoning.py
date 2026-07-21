@@ -16,6 +16,14 @@ class VisualAdapter:
         return {"decisions": self.decisions}
 
 
+class DelayedReadyAdapter(VisualAdapter):
+    is_available = False
+
+    async def select(self, request):
+        self.is_available = True
+        return await super().select(request)
+
+
 def _invoice_candidates() -> dict:
     return {
         "document_number": [
@@ -50,6 +58,7 @@ def test_deterministic_fallback_remains_visible_when_ocr_context_is_unavailable(
 
     assert resolved["document_number"]["verification_status"] == "FALLBACK_UNVERIFIED"
     assert resolved["document_number"]["confidence"] == 0.99
+    assert resolved["document_number"]["manual_review_required"] is True
     assert resolved["transaction_amount"]["status"] == "FOUND"
     assert adapter.request is None
     assert audit["engine"] == "deterministic"
@@ -74,12 +83,33 @@ def test_text_model_extracts_invoice_directly_without_candidate_gating(monkeypat
 
     assert resolved["document_number"]["value"] == "INV-22"
     assert resolved["document_number"]["verification_status"] == "VERIFIED"
-    assert resolved["document_number"]["independent_evidence_count"] == 2
+    assert resolved["document_number"]["independent_evidence_count"] == 1
+    assert resolved["document_number"]["confidence"] == 0.85
+    assert resolved["document_number"]["confidence_calibrated"] is False
     assert audit["engine"] == "qwen3.5-9b"
     assert audit["visual_pages"] == []
     assert adapter.request["requested_fields"] == ["document_number", "transaction_date"]
     assert "images" not in adapter.request
     assert "candidates" not in adapter.request
+
+
+def test_reasoning_retries_an_adapter_that_is_not_ready_at_request_start(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = DelayedReadyAdapter(
+        [{
+            "field_name": "document_number",
+            "page_number": 1,
+            "raw_value": "INV-22",
+            "evidence_quote": "Invoice Number: INV-22",
+        }]
+    )
+
+    resolved, audit = asyncio.run(
+        FieldReasoningService(adapter).resolve({}, "INV", [{"raw_text": "Invoice Number: INV-22"}])
+    )
+
+    assert resolved["document_number"]["verification_status"] == "VERIFIED"
+    assert audit["adapter_available"] is True
 
 
 def test_grounded_text_value_overrides_a_wrong_deterministic_invoice(monkeypatch) -> None:
@@ -172,6 +202,34 @@ def test_text_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
     assert resolved["transaction_date"]["verification_status"] == "VERIFIED"
 
 
+def test_text_model_resolves_realistic_spaced_invoice_and_city_date(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = VisualAdapter(
+        [
+            {
+                "field_name": "document_number",
+                "page_number": 1,
+                "raw_value": "030 NTC0426",
+                "evidence_quote": "No. Invoice : 030 NTC0426",
+                "reason_code": "COMMERCIAL_DOCUMENT_NUMBER",
+            },
+            {
+                "field_name": "transaction_date",
+                "page_number": 1,
+                "raw_value": "01 April 2026",
+                "evidence_quote": "Cibitung,\n01 April 2026",
+                "reason_code": "DOCUMENT_ISSUE_DATE",
+            },
+        ]
+    )
+    pages = [{"raw_text": "No. Invoice : 030 NTC0426\nCibitung,\n01 April 2026"}]
+
+    resolved, _ = asyncio.run(FieldReasoningService(adapter).resolve({}, "INV", pages))
+
+    assert resolved["document_number"]["value"] == "030 NTC0426"
+    assert resolved["transaction_date"]["value"] == "2026-04-01"
+
+
 def test_text_model_cannot_relabel_due_date_as_issue_date(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
@@ -209,6 +267,28 @@ def test_invalid_text_response_keeps_deterministic_evidence_visible(monkeypatch)
     assert resolved["document_number"]["value"] == "INV-22"
     assert resolved["document_number"]["verification_status"] == "FALLBACK_UNVERIFIED"
     assert audit["error"] == "invalid_model_json"
+
+
+def test_reasoning_audit_records_rejected_ungrounded_model_output(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = VisualAdapter(
+        [{
+            "field_name": "document_number",
+            "page_number": 1,
+            "raw_value": "INV-HALLUCINATED",
+            "evidence_quote": "Invoice Number: INV-HALLUCINATED",
+        }]
+    )
+
+    resolved, audit = asyncio.run(
+        FieldReasoningService(adapter).resolve({}, "INV", [{"raw_text": "Invoice Number: INV-22"}])
+    )
+
+    assert resolved["document_number"]["status"] == "NOT_FOUND"
+    assert audit["used"] is False
+    assert audit["grounding_rejections"] == [
+        {"field": "document_number", "reason": "ungrounded_or_invalid_value"}
+    ]
 
 
 def test_text_model_receives_all_pages_in_document_order(monkeypatch) -> None:

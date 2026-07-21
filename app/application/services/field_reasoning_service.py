@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from time import monotonic
 from typing import Any
 
 from app.application.services.field_extraction_service import FieldExtractionService
@@ -19,6 +20,7 @@ _REASON_CODES = {
     "transaction_date": {"DOCUMENT_ISSUE_DATE"},
 }
 _TEXT_FIELDS = ("document_number", "transaction_date")
+_GROUNDED_MODEL_CONFIDENCE = 0.85
 
 
 class FieldReasoningService:
@@ -52,20 +54,13 @@ class FieldReasoningService:
         fields = self._field_extractor.resolve_document_candidates(candidates)
         resolved = self._fallback_fields(fields, candidates)
         text_fields = list(_TEXT_FIELDS)
-        if not settings.REASONING_ENABLED:
-            return resolved, {"enabled": settings.REASONING_ENABLED, "used": False, "engine": "deterministic"}
-        if not self._adapter.is_available:
-            return resolved, {
-                "enabled": True,
-                "used": False,
-                "engine": "deterministic",
-                "error": self._adapter.load_error or "reasoning_not_ready",
-            }
-
         document_context = self._document_context(pages or [])
+        if not settings.REASONING_ENABLED:
+            return resolved, self._audit(False, "deterministic", text_fields, document_context)
         if not document_context:
-            return resolved, {"enabled": True, "used": False, "engine": "deterministic"}
+            return resolved, self._audit(False, "deterministic", text_fields, document_context)
 
+        started = monotonic()
         reply = await self._adapter.select(
             {
                 "document_type": doc_type,
@@ -76,12 +71,15 @@ class FieldReasoningService:
         )
         applied: list[str] = []
         overrides: list[str] = []
+        rejected: list[dict[str, str]] = []
         for decision in reply.get("decisions", []) if isinstance(reply.get("decisions"), list) else []:
             if not isinstance(decision, dict):
+                rejected.append({"field": "unknown", "reason": "invalid_decision"})
                 continue
             name = decision.get("field_name")
             item = self._grounded_candidate(decision, pages or [], doc_type)
             if item is None:
+                rejected.append({"field": str(name or "unknown"), "reason": "ungrounded_or_invalid_value"})
                 continue
             current = resolved.get(name, {})
             if current.get("value") is not None and current.get("value") != item.get("value"):
@@ -97,23 +95,47 @@ class FieldReasoningService:
                     "reason_code": reason_code,
                     "reasoning_engine": "qwen3.5-9b",
                     "verification_status": "VERIFIED",
-                    "independent_evidence_count": 2,
-                    "confidence": max(float(chosen.get("confidence", 0.0)), 0.9),
-                    "score": max(float(chosen.get("score", 0.0)), 0.9),
+                    "independent_evidence_count": 1,
+                    "confidence_source": "GROUNDED_MODEL_SELECTION",
+                    "confidence_calibrated": False,
+                    # Operational floor only: exact OCR grounding, not a calibrated probability.
+                    "confidence": max(float(chosen.get("confidence", 0.0)), _GROUNDED_MODEL_CONFIDENCE),
+                    "score": max(float(chosen.get("score", 0.0)), _GROUNDED_MODEL_CONFIDENCE),
+                    "manual_review_required": False,
                 }
             )
             resolved[name] = chosen
             applied.append(name)
-        return resolved, {
-            "enabled": True,
-            "used": bool(applied),
-            "engine": "qwen3.5-9b",
-            "resolved_fields": applied,
+        audit = self._audit(bool(applied), "qwen3.5-9b", text_fields, document_context)
+        audit.update(
+            {
+                "adapter_available": self._adapter.is_available,
+                "resolved_fields": applied,
+                "overrides": overrides,
+                "grounding_rejections": rejected,
+                "decision_count": len(reply.get("decisions", [])) if isinstance(reply.get("decisions"), list) else 0,
+                "generation_chars": reply.get("generation_chars"),
+                "generation_attempts": reply.get("generation_attempts"),
+                "error": reply.get("error"),
+                "latency_ms": round((monotonic() - started) * 1000),
+            }
+        )
+        return resolved, audit
+
+    @staticmethod
+    def _audit(
+        used: bool, engine: str, requested_fields: list[str], document_context: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        return {
+            "enabled": settings.REASONING_ENABLED,
+            "used": used,
+            "engine": engine,
+            "requested_fields": requested_fields,
             "context_pages": [page["page_number"] for page in document_context],
             "visual_pages": [],
-            "overrides": overrides,
+            "overrides": [],
             "conflicts": [],
-            "error": reply.get("error"),
+            "grounding_rejections": [],
         }
 
     @staticmethod
@@ -130,7 +152,9 @@ class FieldReasoningService:
                     "reason_code": "DETERMINISTIC_FALLBACK",
                     "verification_status": "FALLBACK_UNVERIFIED",
                     "independent_evidence_count": 1,
-                    "manual_review_required": field.get("status") != "FOUND",
+                    "confidence_source": "DETERMINISTIC_HEURISTIC",
+                    "confidence_calibrated": False,
+                    "manual_review_required": True,
                 }
                 continue
             resolved[name] = {

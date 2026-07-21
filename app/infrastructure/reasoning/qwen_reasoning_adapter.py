@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import httpx
@@ -27,6 +28,8 @@ class QwenReasoningAdapter:
         self._available = False
         self._load_error: str | None = None
         self._lock = asyncio.Lock()
+        self._warmup_lock = asyncio.Lock()
+        self._next_retry_at = 0.0
 
     @property
     def is_available(self) -> bool:
@@ -37,6 +40,17 @@ class QwenReasoningAdapter:
         return self._load_error
 
     async def warmup(self) -> None:
+        """Load/check the engine once, then retry a failed remote dependency after cooldown."""
+        if self._available:
+            return
+        if monotonic() < self._next_retry_at:
+            return
+        async with self._warmup_lock:
+            if self._available or monotonic() < self._next_retry_at:
+                return
+            await self._warmup_once()
+
+    async def _warmup_once(self) -> None:
         global _runtime
         if not settings.REASONING_ENABLED:
             self._load_error = "reasoning_disabled"
@@ -50,6 +64,7 @@ class QwenReasoningAdapter:
             except Exception as exc:
                 self._available = False
                 self._load_error = f"Remote service unavailable: {exc}"
+                self._next_retry_at = monotonic() + settings.REASONING_RETRY_COOLDOWN_SECONDS
             return
         if _runtime is not None:
             self._runtime, self._available, self._load_error = _runtime, True, None
@@ -82,9 +97,12 @@ class QwenReasoningAdapter:
         except Exception as exc:
             self._available = False
             self._load_error = f"{type(exc).__name__}: {exc}"
+            self._next_retry_at = monotonic() + settings.REASONING_RETRY_COOLDOWN_SECONDS
             logger.exception("qwen_text_load_failed")
 
     async def select(self, request: dict[str, Any]) -> dict[str, Any]:
+        if not self._available:
+            await self.warmup()
         if not self._available:
             return {"error": self._load_error or "reasoning_not_loaded", "decisions": []}
         if self._service_url:
@@ -92,20 +110,55 @@ class QwenReasoningAdapter:
                 async with httpx.AsyncClient(timeout=settings.REASONING_TIMEOUT_SECONDS) as client:
                     response = await client.post(f"{self._service_url}/api/v1/reasoning/select", json=request)
                     response.raise_for_status()
-                return response.json()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("reasoning service returned a non-object response")
+                return payload
             except Exception as exc:
                 error = f"remote_reasoning_error:{type(exc).__name__}:{exc}"
+                self._available = False
+                self._load_error = error
+                self._next_retry_at = monotonic() + settings.REASONING_RETRY_COOLDOWN_SECONDS
                 logger.warning("qwen_text_remote_failed", error=error)
                 return {"error": error, "decisions": []}
         async with self._lock:
             return await asyncio.to_thread(self._infer, request)
 
     def _infer(self, request: dict[str, Any]) -> dict[str, Any]:
-        import torch
-
         model, tokenizer = self._runtime  # type: ignore[misc]
         prompt = _prompt(request)
         messages = [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+        generated = self._generate(model, tokenizer, messages)
+        payload = _first_json_object(generated)
+        attempts = 1
+        if payload is None:
+            repair_messages = [
+                {
+                    "role": "system",
+                    "content": "Return the required JSON object only. No prose, Markdown, or explanation.",
+                },
+                {"role": "user", "content": prompt},
+            ]
+            generated = self._generate(model, tokenizer, repair_messages)
+            payload = _first_json_object(generated)
+            attempts = 2
+        if payload is None:
+            return {
+                "error": "invalid_model_json",
+                "decisions": [],
+                "generation_chars": len(generated),
+                "generation_attempts": attempts,
+            }
+        return {
+            **_decisions(payload),
+            "generation_chars": len(generated),
+            "generation_attempts": attempts,
+        }
+
+    @staticmethod
+    def _generate(model: Any, tokenizer: Any, messages: list[dict[str, str]]) -> str:
+        import torch
+
         text = _chat_prompt(tokenizer, messages)
         inputs = tokenizer(text, return_tensors="pt").to(model.device)
         with torch.inference_mode():
@@ -115,11 +168,7 @@ class QwenReasoningAdapter:
                 max_new_tokens=settings.REASONING_MAX_OUTPUT_TOKENS,
                 pad_token_id=tokenizer.eos_token_id,
             )
-        generated = tokenizer.decode(output[0][inputs["input_ids"].shape[-1] :], skip_special_tokens=True)
-        payload = _first_json_object(generated)
-        if payload is None:
-            return {"error": "invalid_model_json", "decisions": []}
-        return _decisions(payload)
+        return tokenizer.decode(output[0][inputs["input_ids"].shape[-1] :], skip_special_tokens=True)
 
 
 def _chat_prompt(tokenizer: Any, messages: list[dict[str, str]]) -> str:

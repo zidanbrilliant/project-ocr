@@ -53,11 +53,22 @@ class BusinessRuleEvaluator:
         business_context: dict[str, Any] | None = None,
         barcode_result: dict[str, Any] | None = None,
         is_colored: bool | None = None,
+        field_provenance: dict[str, dict[str, Any]] | None = None,
     ) -> BusinessValidationResult:
         failed: list[FailedRule] = []
 
         if self._config.require_invoice_number and not ocr.invoice_number:
             failed.append(FailedRule("INV-R001", "Invoice number required", "Invoice number not found."))
+        elif self._config.require_invoice_number and field_provenance is not None:
+            invoice = field_provenance.get("document_number", {})
+            if invoice.get("verification_status") != "VERIFIED":
+                failed.append(
+                    FailedRule(
+                        "INV-R012",
+                        "Invoice number requires verified OCR evidence",
+                        "Invoice number is a deterministic fallback and requires model verification.",
+                    )
+                )
 
         if self._config.require_amount and amount is None:
             failed.append(FailedRule("INV-R002", "Amount required", "Amount not found."))

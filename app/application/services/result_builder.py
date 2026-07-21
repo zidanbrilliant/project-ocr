@@ -234,6 +234,8 @@ def _field_entries(fields: dict[str, Any], page_number: int | None) -> list[dict
                 "reasoning_engine": field.get("reasoning_engine"),
                 "verification_status": field.get("verification_status"),
                 "independent_evidence_count": field.get("independent_evidence_count"),
+                "confidence_source": field.get("confidence_source"),
+                "confidence_calibrated": field.get("confidence_calibrated"),
                 "manual_review_required": field.get("manual_review_required", False),
                 "amount_role": field.get("amount_role"),
                 "currency": field.get("currency"),

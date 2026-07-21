@@ -544,6 +544,7 @@ class AIPipelineOrchestrator:
                     business_context=req.business_context,
                     barcode_result=bc_final,
                     is_colored=result.quality_metrics["is_colored"],
+                    field_provenance=fields,
                 )
 
             # Confidence

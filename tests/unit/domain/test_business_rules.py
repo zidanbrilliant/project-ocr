@@ -50,6 +50,23 @@ def test_invoice_missing_stamp(evaluator: BusinessRuleEvaluator) -> None:
     assert any("stamp" in r.rule_id.lower() for r in result.failed_rules)
 
 
+def test_invoice_deterministic_fallback_cannot_pass_as_verified(evaluator: BusinessRuleEvaluator) -> None:
+    ocr = OCRResult(invoice_number="INV-001", transaction_amount=1_000_000.0)
+    detections = [
+        DetectionResult(page_number=1, model_name="yolo", model_version="1", object_type="stamp", result="OK", required=True, confidence=90.0),
+    ]
+
+    result = evaluator.validate_invoice(
+        ocr,
+        detections,
+        1_000_000.0,
+        90.0,
+        field_provenance={"document_number": {"verification_status": "FALLBACK_UNVERIFIED"}},
+    )
+
+    assert any(rule.rule_id == "INV-R012" for rule in result.failed_rules)
+
+
 def test_invoice_requires_decoded_barcode_and_colored_document() -> None:
     evaluator = BusinessRuleEvaluator(RuleConfig(require_invoice_number=False, require_amount=False, require_stamp=False, require_barcode=True))
     result = evaluator.validate_invoice(OCRResult(), [], None, None, barcode_result={"barcode_found": True, "barcode_decoded": False}, is_colored=False)

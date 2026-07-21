@@ -324,6 +324,7 @@ class DirectProcessor:
                     business_context=None,
                     barcode_result=barcode_raw,
                     is_colored=document_colored,
+                    field_provenance=fields,
                 )
 
             total_conf = self._conf_scorer.calculate(
