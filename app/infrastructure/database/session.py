@@ -18,8 +18,9 @@ def _async_url(url: str) -> str:
 
 engine = create_async_engine(
     _async_url(settings.DATABASE_URL),
-    pool_size=5,
-    max_overflow=10,
+    pool_size=settings.DATABASE_POOL_SIZE,
+    max_overflow=settings.DATABASE_MAX_OVERFLOW,
+    pool_timeout=settings.DATABASE_POOL_TIMEOUT_SECONDS,
     echo=settings.APP_ENV == "local",
 )
 

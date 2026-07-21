@@ -69,7 +69,7 @@ _NON_PAYABLE_ROLES = {
     "rounding",
     "paid",
 }
-_NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period"}
+_NON_ISSUE_DATE_ROLES = {"due_date", "payment_date", "print_date", "tax_period", "unlabelled"}
 _CONTEXT_FIELDS = {"document_number", "transaction_amount"}
 _CONTEXT_LABEL_MIN_SCORE = 0.9
 

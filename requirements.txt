@@ -15,7 +15,6 @@ streamlit>=1.35
 
 zxing-cpp>=2.2
 pyzbar>=0.1
-pypdf>=4.0
 
 # NVIDIA Nemotron Parse v1.2 official runtime versions.
 accelerate==1.12.0

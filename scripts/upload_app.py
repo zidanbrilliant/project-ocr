@@ -352,6 +352,9 @@ def _render_fields(page: dict) -> None:
 def _render_summary(ui_result: dict) -> None:
     payload = ui_result["rabbitmq_preview"]
     document = payload["documents"][0]
+    reasoning = document.get("reasoning") or {}
+    if reasoning.get("error"):
+        st.error(f"Qwen reasoning unavailable: {reasoning['error']}")
     summary = document.get("document_summary") or {}
     st.metric("Result", summary.get("result", document.get("processing_result", "?")))
     st.write(summary.get("reason", "No summary available."))

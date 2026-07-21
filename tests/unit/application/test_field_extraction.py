@@ -412,6 +412,13 @@ def test_does_not_fill_issue_date_with_due_date() -> None:
     assert fields["transaction_date"]["status"] == "NOT_FOUND"
 
 
+def test_does_not_fill_issue_date_with_an_unlabelled_city_date() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Karawang, October 31, 2023"})
+
+    assert fields["transaction_date"]["value"] is None
+    assert fields["transaction_date"]["status"] == "NOT_FOUND"
+
+
 def test_date_role_follows_split_due_and_print_labels() -> None:
     service = FieldExtractionService()
     for text, expected_role in (

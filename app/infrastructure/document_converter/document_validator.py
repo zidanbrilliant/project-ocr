@@ -71,9 +71,10 @@ class DocumentValidator:
 
     def _count_pdf_pages(self, content: bytes) -> int:
         try:
-            from pypdf import PdfReader
-            import io
-            return max(len(PdfReader(io.BytesIO(content)).pages), 1)
+            import fitz
+
+            with fitz.open(stream=content, filetype="pdf") as document:
+                return max(len(document), 1)
         except Exception:
             return 1
 
