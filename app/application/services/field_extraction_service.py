@@ -13,7 +13,7 @@ _CURRENCY_RE = re.compile(
     r"(?i)(?:(?P<prefix>Rp\.?|IDR\.?|US\$|USD|S\$|SGD|A\$|AUD|C\$|CAD|NZ\$|NZD|HK\$|HKD|CN¥|CNY|RMB|EUR|\u20ac|GBP|\u00a3|JPY|\u00a5|KRW|\u20a9|INR|\u20b9|MYR|RM|THB|\u0e3f|PHP|\u20b1|VND|\u20ab|CHF|AED|SAR|R\$|BRL|ZAR|\$)\s*(?P<prefix_amount>[0-9][0-9.,]*)|(?P<suffix_amount>[0-9][0-9.,]*)\s*(?P<suffix>IDR|USD|SGD|AUD|CAD|NZD|HKD|CNY|RMB|EUR|GBP|JPY|KRW|INR|MYR|THB|PHP|VND|CHF|AED|SAR|BRL|ZAR))"
 )
 _DATE_RE = re.compile(
-    r"(?i)\b(?:\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{2,4}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2},?\s+\d{2,4})\b"
+    r"(?i)\b(?:\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}[./-](?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[./-]\d{2,4}|\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{2,4}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2},?\s+\d{2,4})\b"
 )
 _DATE_FORMATS = (
     "%d/%m/%Y",
@@ -25,6 +25,8 @@ _DATE_FORMATS = (
     "%Y/%m/%d",
     "%Y-%m-%d",
     "%Y.%m.%d",
+    "%d-%b-%Y",
+    "%d-%b-%y",
     "%d %B %Y",
     "%d %b %Y",
     "%d %B %y",
@@ -408,6 +410,7 @@ class FieldExtractionService:
                 for index, line in enumerate(raw_text.splitlines())
                 if line.strip()
             ]
+        lines = self._split_compound_header_lines(lines)
 
         for line_index, (line, bbox, block_id) in enumerate(lines):
             label, value = self._split_label_value(line)
@@ -1019,6 +1022,19 @@ class FieldExtractionService:
     @staticmethod
     def _money_tolerance(currency: str) -> float:
         return 1.0 if currency in {"IDR", "JPY"} else 0.01
+
+    @staticmethod
+    def _split_compound_header_lines(
+        lines: list[tuple[str, Any, str]]
+    ) -> list[tuple[str, Any, str]]:
+        expanded: list[tuple[str, Any, str]] = []
+        for line, bbox, block_id in lines:
+            parts = [part.strip() for part in re.split(r"\s*[|¦]\s*", line) if part.strip()]
+            if sum(FieldExtractionService._split_label_value(part)[0] is not None for part in parts) >= 2:
+                expanded.extend((part, bbox, block_id) for part in parts)
+            else:
+                expanded.append((line, bbox, block_id))
+        return expanded
 
     @staticmethod
     def _split_label_value(line: str) -> tuple[str | None, str | None]:

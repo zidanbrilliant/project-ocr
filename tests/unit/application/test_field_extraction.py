@@ -176,6 +176,20 @@ def test_extracts_numeric_receipt_number_and_short_dot_date() -> None:
     assert fields["transaction_date"]["value"] == "2026-07-21"
 
 
+def test_extracts_invoice_and_date_from_compound_header_row() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {
+            "raw_text": (
+                "INVOICE NO.: 0000031732 | DATE : 02-Apr-2026 | "
+                "CUSTOMER CODE : 5597400-AJ | QUANTITY PCS |"
+            )
+        }
+    )
+
+    assert fields["document_number"]["value"] == "0000031732"
+    assert fields["transaction_date"]["value"] == "2026-04-02"
+
+
 def test_preserves_letter_number_invoice_id_with_spaced_separators() -> None:
     fields = FieldExtractionService().extract_from_ocr({"raw_text": "Invoice No: RI - 23014073"})
 
