@@ -68,18 +68,16 @@ class FieldReasoningService:
         pages: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
         fields = self._field_extractor.resolve_document_candidates(candidates)
+        resolved = self._qwen_only_core_fields(fields, candidates)
         selected: dict[str, list[dict[str, Any]]] = {}
         for name in set(candidates) | _CORE_SELECTION_FIELDS:
             items = candidates.get(name, [])
-            if (
-                name in _CORE_SELECTION_FIELDS
-                and (pages or fields.get(name, {}).get("status") != "FOUND")
-            ) or len({str(item.get("value")) for item in items}) > 1:
+            if name in _CORE_SELECTION_FIELDS or len({str(item.get("value")) for item in items}) > 1:
                 selected[name] = items
         if not settings.REASONING_ENABLED or not selected:
-            return fields, {"enabled": settings.REASONING_ENABLED, "used": False, "engine": "deterministic"}
+            return resolved, {"enabled": settings.REASONING_ENABLED, "used": False, "engine": "deterministic"}
         if not self._adapter.is_available:
-            return fields, {
+            return resolved, {
                 "enabled": True,
                 "used": False,
                 "engine": "deterministic",
@@ -93,7 +91,7 @@ class FieldReasoningService:
                 item
                 for item in items
                 if not (
-                    name == "transaction_amount" and item.get("amount_role") in _NON_PAYABLE_ROLES
+                    name == "transaction_amount" and item.get("amount_role") != "final_total"
                 )
                 and not (name == "transaction_date" and item.get("date_role") in _NON_ISSUE_DATE_ROLES)
             ]
@@ -147,7 +145,7 @@ class FieldReasoningService:
 
         document_context = self._document_context(pages or [], candidates)
         if not payload_fields or (not document_context and not any(payload_fields.values())):
-            return fields, {"enabled": True, "used": False, "engine": "deterministic"}
+            return resolved, {"enabled": True, "used": False, "engine": "deterministic"}
 
         reply = await self._adapter.select(
             {
@@ -157,7 +155,6 @@ class FieldReasoningService:
                 "document_context": document_context,
             }
         )
-        resolved = dict(fields)
         applied: list[str] = []
         for decision in reply.get("decisions", []) if isinstance(reply.get("decisions"), list) else []:
             if not isinstance(decision, dict):
@@ -197,6 +194,39 @@ class FieldReasoningService:
             "context_pages": [page["page_number"] for page in document_context],
             "error": reply.get("error"),
         }
+
+    @staticmethod
+    def _qwen_only_core_fields(
+        fields: dict[str, dict[str, Any]], candidates: dict[str, list[dict[str, Any]]]
+    ) -> dict[str, dict[str, Any]]:
+        """Keep only arithmetic-proof totals when Qwen has not selected a core field."""
+        resolved = dict(fields)
+        for name in _CORE_SELECTION_FIELDS:
+            field = fields.get(name, {})
+            if (
+                name == "transaction_amount"
+                and field.get("amount_role") == "final_total"
+                and str(field.get("validation", "")).startswith("RECONCILED")
+            ):
+                continue
+            resolved[name] = {
+                "value": None,
+                "raw_value": None,
+                "confidence": 0.0,
+                "score": 0.0,
+                "status": "NOT_FOUND",
+                "reason_code": "REASONING_REQUIRED",
+                "candidate_count": len(candidates.get(name, [])),
+                "alternatives": [
+                    {
+                        "value": item.get("value"),
+                        "score": item.get("score"),
+                        "source_text": item.get("source_text"),
+                    }
+                    for item in candidates.get(name, [])[:3]
+                ],
+            }
+        return resolved
 
     def _grounded_candidate(
         self, decision: dict[str, Any], pages: list[dict[str, Any]], doc_type: str

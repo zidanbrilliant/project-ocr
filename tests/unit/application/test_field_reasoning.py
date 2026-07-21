@@ -11,12 +11,13 @@ class _Adapter:
         return None
 
     async def select(self, request):
-        assert request["candidates"]["transaction_amount"][1]["candidate_id"] == "transaction_amount-1"
+        candidates = request["candidates"]["transaction_amount"]
+        assert candidates[-1]["candidate_id"] == f"transaction_amount-{len(candidates) - 1}"
         return {
             "decisions": [
                 {
                     "field_name": "transaction_amount",
-                    "candidate_id": "transaction_amount-1",
+                    "candidate_id": candidates[-1]["candidate_id"],
                     "confidence": 0.97,
                     "reason_code": "FINAL_PAYABLE_TOTAL",
                 }
@@ -31,8 +32,8 @@ def test_reasoning_can_only_select_existing_candidate(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     candidates = {
         "transaction_amount": [
-            {"value": 100.0, "confidence": 0.9, "score": 0.9, "source_text": "DPP: 100"},
-            {"value": 110.0, "confidence": 0.9, "score": 0.9, "source_text": "Grand Total: 110"},
+            {"value": 100.0, "confidence": 0.9, "score": 0.9, "source_text": "DPP: 100", "amount_role": "tax_base"},
+            {"value": 110.0, "confidence": 0.9, "score": 0.9, "source_text": "Grand Total: 110", "amount_role": "final_total"},
         ]
     }
 
@@ -175,6 +176,7 @@ def test_reasoning_checks_a_single_weak_core_candidate(monkeypatch) -> None:
                 "score": 0.62,
                 "source_text": "USD 999",
                 "candidate_only": True,
+                "amount_role": "unlabelled_currency",
             }
         ]
     }
@@ -183,7 +185,7 @@ def test_reasoning_checks_a_single_weak_core_candidate(monkeypatch) -> None:
 
     assert resolved["transaction_amount"]["status"] == "NOT_FOUND"
     assert audit["used"] is False
-    assert audit["engine"] == "qwen3.5-9b"
+    assert audit["engine"] == "deterministic"
 
 
 def test_reasoning_receives_candidate_label_relation(monkeypatch) -> None:
@@ -206,6 +208,7 @@ def test_reasoning_receives_candidate_label_relation(monkeypatch) -> None:
                 "label_relation": "before_label",
                 "label_distance": 1,
                 "candidate_only": True,
+                "amount_role": "final_total",
             }
         ]
     }
@@ -255,14 +258,14 @@ def test_reasoning_deduplicates_values_before_selecting_candidates(monkeypatch) 
     class UniqueAdapter(_Adapter):
         async def select(self, request):
             values = [item["value"] for item in request["candidates"]["transaction_amount"]]
-            assert values == [110.0, 100.0]
+            assert values == [110.0]
             return {"decisions": []}
 
     candidates = {
         "transaction_amount": [
-            {"value": 110.0, "confidence": 0.8, "score": 0.8, "source_text": "Total: 110"},
-            {"value": 110.0, "confidence": 0.7, "score": 0.7, "source_text": "duplicate 110"},
-            {"value": 100.0, "confidence": 0.6, "score": 0.6, "source_text": "Subtotal: 100"},
+            {"value": 110.0, "confidence": 0.8, "score": 0.8, "source_text": "Total: 110", "amount_role": "final_total"},
+            {"value": 110.0, "confidence": 0.7, "score": 0.7, "source_text": "duplicate 110", "amount_role": "final_total"},
+            {"value": 100.0, "confidence": 0.6, "score": 0.6, "source_text": "Subtotal: 100", "amount_role": "subtotal"},
         ]
     }
 
@@ -282,8 +285,8 @@ def test_reasoning_keeps_equal_values_in_different_currencies(monkeypatch) -> No
 
     candidates = {
         "transaction_amount": [
-            {"value": 100.0, "currency": "USD", "confidence": 0.2, "score": 0.2},
-            {"value": 100.0, "currency": "JPY", "confidence": 0.2, "score": 0.2},
+            {"value": 100.0, "currency": "USD", "confidence": 0.2, "score": 0.2, "amount_role": "final_total"},
+            {"value": 100.0, "currency": "JPY", "confidence": 0.2, "score": 0.2, "amount_role": "final_total"},
         ]
     }
 
@@ -384,7 +387,7 @@ def test_reasoning_rejects_model_value_not_present_in_ocr(monkeypatch) -> None:
         FieldReasoningService(HallucinatingAdapter()).resolve({}, "INV", [{"raw_text": "Invoice Number: INV-123"}])
     )
 
-    assert "document_number" not in resolved
+    assert resolved["document_number"]["status"] == "NOT_FOUND"
     assert audit["used"] is False
 
 
@@ -409,8 +412,62 @@ def test_reasoning_rejects_non_payable_grounded_amount(monkeypatch) -> None:
         FieldReasoningService(SubtotalAdapter()).resolve({}, "INV", [{"raw_text": "Subtotal: USD 100.00"}])
     )
 
-    assert "transaction_amount" not in resolved
+    assert resolved["transaction_amount"]["status"] == "NOT_FOUND"
     assert audit["used"] is False
+
+
+def test_reasoning_rejects_generic_date_and_hides_unselected_core_fields(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class GenericDateAdapter(_Adapter):
+        async def select(self, request):
+            assert request["candidates"]["transaction_amount"] == []
+            return {
+                "decisions": [
+                    {
+                        "field_name": "transaction_date",
+                        "page_number": 1,
+                        "raw_value": "31/10/2023",
+                        "evidence_quote": "Date: 31/10/2023",
+                        "reason_code": "DOCUMENT_ISSUE_DATE",
+                    }
+                ]
+            }
+
+    resolved, audit = asyncio.run(
+        FieldReasoningService(GenericDateAdapter()).resolve(
+            {"transaction_amount": [{"value": 999.0, "confidence": 0.9, "score": 0.9, "amount_role": "unlabelled_currency"}]},
+            "INV",
+            [{"raw_text": "Date: 31/10/2023\nUSD 999.00"}],
+        )
+    )
+
+    assert resolved["transaction_date"]["status"] == "NOT_FOUND"
+    assert resolved["transaction_amount"]["status"] == "NOT_FOUND"
+    assert audit["used"] is False
+
+
+def test_reasoning_unavailable_never_returns_unreconciled_core_fields(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class UnavailableAdapter:
+        is_available = False
+        load_error = "model_not_loaded"
+
+    candidates = {
+        "document_number": [{"value": "INV-1", "confidence": 0.99, "score": 0.99}],
+        "transaction_amount": [{"value": 100.0, "confidence": 0.99, "score": 0.99, "amount_role": "final_total"}],
+        "transaction_date": [{"value": "2026-01-01", "confidence": 0.9, "score": 0.9, "date_role": "issue_date"}],
+    }
+
+    resolved, audit = asyncio.run(FieldReasoningService(UnavailableAdapter()).resolve(candidates, "INV"))
+
+    assert {name: field["status"] for name, field in resolved.items()} == {
+        "document_number": "NOT_FOUND",
+        "transaction_amount": "NOT_FOUND",
+        "transaction_date": "NOT_FOUND",
+    }
+    assert audit["error"] == "model_not_loaded"
 
 
 def test_reasoning_does_not_drop_candidates_after_twelve(monkeypatch) -> None:

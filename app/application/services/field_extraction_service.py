@@ -264,11 +264,15 @@ class FieldExtractionService:
             return None
 
         extra: dict[str, Any] = {}
-        if name == "document_number" and not self._allowed(name, self._normal(evidence_quote), doc_type):
-            return None
+        if name == "document_number":
+            labels = self._context_labels(evidence_quote)
+            if not self._allowed(name, self._normal(evidence_quote), doc_type) or not any(
+                field_name == name and score >= _CONTEXT_LABEL_MIN_SCORE for field_name, _, score in labels
+            ):
+                return None
         if name == "transaction_amount":
             role_data = self._financial_role(evidence_quote)
-            if role_data is not None and role_data[0] != "final_total":
+            if role_data is None or role_data[0] != "final_total":
                 return None
             extra = {
                 "amount_role": "final_total",
@@ -276,7 +280,7 @@ class FieldExtractionService:
             }
         if name == "transaction_date":
             role_data = self._date_role(evidence_quote)
-            if role_data is not None and role_data[1] != "issue_date":
+            if role_data is None or role_data[1] != "issue_date":
                 return None
             extra["date_role"] = "issue_date"
 
@@ -798,6 +802,7 @@ class FieldExtractionService:
                     "document date",
                 ),
             ),
+            (0.5, "generic_date", ("date", "tanggal", "tgl")),
         )
         for score, role, labels in roles:
             label = next((item for item in labels if item in normalized), None)
@@ -828,15 +833,17 @@ class FieldExtractionService:
                     parsed = self._parse(name, value)
                     if parsed is not None and self._allowed(name, normalized, doc_type):
                         money = self._rightmost_money_pair(value) if name == "transaction_amount" else None
-                        extra = (
-                            {
+                        if name == "transaction_amount":
+                            extra = {
                                 "amount_role": "final_total",
                                 "currency": self._currency(value) or "IDR",
                                 "candidate_only": alias == "total",
                             }
-                            if name == "transaction_amount"
-                            else {}
-                        )
+                        elif name == "transaction_date":
+                            role_data = self._date_role(label)
+                            extra = {"date_role": role_data[1] if role_data else "unlabelled"}
+                        else:
+                            extra = {}
                         self._add(
                             candidates,
                             name,
@@ -952,8 +959,6 @@ class FieldExtractionService:
         checked = [dict(item) for item in items]
         final_totals = [item for item in checked if item.get("amount_role") == "final_total"]
         for item in final_totals:
-            item["score"] = max(float(item["score"]), 0.98)
-            item["confidence"] = item["score"]
             item["validation"] = "LABELLED_FINAL_TOTAL"
             expected, validation = FieldExtractionService._expected_payable(checked, item.get("currency", "IDR"))
             if expected is not None and abs(float(item["value"]) - expected) <= FieldExtractionService._money_tolerance(
