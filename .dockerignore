@@ -6,6 +6,7 @@ __pycache__
 *.md
 docs/
 tests/
+dataset groundtruth/
 .pytest_cache/
 .venv
 venv/

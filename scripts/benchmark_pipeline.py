@@ -46,6 +46,27 @@ def evaluate_fields(result: dict, expected: dict) -> dict:
     return {"checks": checks, "all_core_fields_exact": bool(checks) and all(checks.values())}
 
 
+def evaluate_candidate_recall(result: dict, expected: dict) -> dict[str, bool]:
+    """Report whether the correct non-null value existed before final selection."""
+    audit = result.get("field_candidate_audit", {})
+    checks: dict[str, bool] = {}
+    for name in CORE_FIELDS:
+        if name not in expected:
+            continue
+        target = expected[name]
+        target_value = target.get("value") if isinstance(target, dict) else target
+        if target_value is None:
+            continue
+        expected_currency = target.get("currency") if isinstance(target, dict) else None
+        checks[name] = any(
+            _values_match(candidate.get("value"), target_value)
+            and (not expected_currency or candidate.get("currency") == expected_currency)
+            for candidate in audit.get(name, [])
+            if isinstance(candidate, dict)
+        )
+    return checks
+
+
 def _values_match(actual: object, expected: object) -> bool:
     if actual is None or expected is None:
         return actual is expected
@@ -54,7 +75,12 @@ def _values_match(actual: object, expected: object) -> bool:
     return str(actual).strip().upper() == str(expected).strip().upper()
 
 
-async def benchmark(input_dir: Path, doc_type: str, ground_truth: dict[str, dict] | None = None) -> dict:
+async def benchmark(
+    input_dir: Path,
+    doc_type: str,
+    ground_truth: dict[str, dict] | None = None,
+    include_trace: bool = False,
+) -> dict:
     from scripts.direct_processor import DirectProcessor
 
     files = sorted(path for path in input_dir.rglob("*") if path.suffix.lower() in SUPPORTED)
@@ -81,6 +107,28 @@ async def benchmark(input_dir: Path, doc_type: str, ground_truth: dict[str, dict
         expected = (ground_truth or {}).get(path.name)
         if expected is not None:
             row["evaluation"] = evaluate_fields(result, expected)
+            row["candidate_recall"] = evaluate_candidate_recall(result, expected)
+        if include_trace:
+            row["trace"] = {
+                "fields": result.get("fields", {}),
+                "field_candidate_audit": result.get("field_candidate_audit", {}),
+                "reasoning": result.get("reasoning", {}),
+                "ocr_pages": [
+                    {
+                        key: page.get(key)
+                        for key in (
+                            "engine_name",
+                            "raw_text",
+                            "tokens_json",
+                            "average_confidence",
+                            "processing_time_ms",
+                            "error",
+                        )
+                        if page.get(key) is not None
+                    }
+                    for page in result.get("_page_ocrs", [])
+                ],
+            }
         results.append(row)
 
     duration = time.perf_counter() - started
@@ -97,6 +145,18 @@ async def benchmark(input_dir: Path, doc_type: str, ground_truth: dict[str, dict
             round(metric["exact_matches"] / metric["evaluated"], 4) if metric["evaluated"] else None
         )
 
+    candidate_metrics = {
+        name: {
+            "evaluated": sum(name in item.get("candidate_recall", {}) for item in results),
+            "correct_candidates": sum(item.get("candidate_recall", {}).get(name, False) for item in results),
+        }
+        for name in CORE_FIELDS
+    }
+    for metric in candidate_metrics.values():
+        metric["recall"] = (
+            round(metric["correct_candidates"] / metric["evaluated"], 4) if metric["evaluated"] else None
+        )
+
     return {
         "documents": len(files),
         "pages": total_pages,
@@ -107,6 +167,7 @@ async def benchmark(input_dir: Path, doc_type: str, ground_truth: dict[str, dict
         "accuracy": {
             "labeled_documents": len(labeled),
             "field_metrics": field_metrics,
+            "candidate_metrics": candidate_metrics,
             "all_core_fields_exact": sum(item["all_core_fields_exact"] for item in labeled),
             "all_core_fields_exact_rate": round(
                 sum(item["all_core_fields_exact"] for item in labeled) / len(labeled), 4
@@ -124,9 +185,10 @@ def main() -> None:
     parser.add_argument("--doc-type", default="INV", choices=("INV", "DN"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/benchmark.json"))
     parser.add_argument("--ground-truth", type=Path, help="JSON/JSONL rows with file_name and fields")
+    parser.add_argument("--include-trace", action="store_true", help="Include OCR, candidates, fields, and reasoning")
     args = parser.parse_args()
     ground_truth = load_ground_truth(args.ground_truth) if args.ground_truth else None
-    report = asyncio.run(benchmark(args.input_dir, args.doc_type, ground_truth))
+    report = asyncio.run(benchmark(args.input_dir, args.doc_type, ground_truth, args.include_trace))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps({key: value for key, value in report.items() if key != "results"}, indent=2))
