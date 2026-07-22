@@ -64,6 +64,34 @@ def test_deterministic_fallback_remains_visible_when_ocr_context_is_unavailable(
     assert audit["engine"] == "deterministic"
 
 
+def test_reasoning_skips_fields_that_are_already_unambiguous(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = VisualAdapter()
+    candidates = {
+        "document_number": [{"value": "INV-1", "confidence": 0.99, "score": 0.99}],
+        "transaction_amount": [{"value": 110.0, "confidence": 0.99, "score": 0.99, "amount_role": "final_total"}],
+        "transaction_date": [{"value": "2026-01-01", "confidence": 0.9, "score": 0.9, "date_role": "issue_date"}],
+    }
+
+    _, audit = asyncio.run(FieldReasoningService(adapter).resolve(candidates, "INV", [{"raw_text": "Invoice"}]))
+
+    assert adapter.request is None
+    assert audit["requested_fields"] == []
+
+
+def test_reasoning_audit_keeps_raw_model_response(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+
+    class TraceAdapter(VisualAdapter):
+        async def select(self, request):
+            self.request = request
+            return {"decisions": [], "raw_response": '{"decisions": []}'}
+
+    _, audit = asyncio.run(FieldReasoningService(TraceAdapter()).resolve({}, "INV", [{"raw_text": "Invoice"}]))
+
+    assert audit["model_response"] == '{"decisions": []}'
+
+
 def test_text_model_receives_candidates_but_can_extract_invoice_directly(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(

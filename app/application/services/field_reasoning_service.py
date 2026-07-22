@@ -55,21 +55,27 @@ class FieldReasoningService:
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
         fields = self._field_extractor.resolve_document_candidates(candidates)
         resolved = self._fallback_fields(fields, candidates)
-        core_fields = list(_CORE_FIELDS)
+        core_fields = [
+            name
+            for name in _CORE_FIELDS
+            if resolved.get(name, {}).get("status") != "FOUND" or len(candidates.get(name, [])) > 1
+        ]
         document_context = self._document_context(pages or [])
         if not settings.REASONING_ENABLED:
             return resolved, self._audit(False, "deterministic", core_fields, document_context)
         if not document_context:
             return resolved, self._audit(False, "deterministic", core_fields, document_context)
+        if not core_fields:
+            return resolved, self._audit(False, "deterministic", core_fields, document_context)
 
-        model_candidates = self._model_candidates(candidates)
+        model_candidates = self._model_candidates(candidates, core_fields)
         candidate_index = {item["candidate_id"]: item for item in model_candidates}
         started = monotonic()
         reply = await self._adapter.select(
             {
                 "document_type": doc_type,
                 "requested_fields": core_fields,
-                "field_definitions": _FIELD_DEFINITIONS,
+                "field_definitions": {name: _FIELD_DEFINITIONS[name] for name in core_fields},
                 "candidates": model_candidates,
                 "page_ocr": document_context,
             }
@@ -124,6 +130,7 @@ class FieldReasoningService:
                 "generation_chars": reply.get("generation_chars"),
                 "generation_attempts": reply.get("generation_attempts"),
                 "error": reply.get("error"),
+                "model_response": reply.get("raw_response"),
                 "latency_ms": round((monotonic() - started) * 1000),
             }
         )
@@ -227,10 +234,10 @@ class FieldReasoningService:
         return item
 
     @staticmethod
-    def _model_candidates(candidates: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    def _model_candidates(candidates: dict[str, list[dict[str, Any]]], field_names: list[str]) -> list[dict[str, Any]]:
         """Keep Qwen choices grounded, while retaining its raw-OCR fallback."""
         result: list[dict[str, Any]] = []
-        for name in _CORE_FIELDS:
+        for name in field_names:
             for index, item in enumerate(candidates.get(name, []), start=1):
                 result.append(
                     {

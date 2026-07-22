@@ -178,11 +178,13 @@ class QwenReasoningAdapter:
                 "decisions": [],
                 "generation_chars": len(generated),
                 "generation_attempts": attempts,
+                "raw_response": generated,
             }
         return {
             **_decisions(payload),
             "generation_chars": len(generated),
             "generation_attempts": attempts,
+            "raw_response": generated,
         }
 
     @staticmethod

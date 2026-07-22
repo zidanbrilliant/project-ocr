@@ -479,3 +479,64 @@ def test_requests_visual_ocr_only_when_native_labeled_field_is_unresolved() -> N
         {"raw_text": "Invoice No: INV-7\nInvoice Date: 20/07/2026\nGrand Total: Rp 1.000.000"}
     )
     assert service.needs_visual_ocr({"raw_text": "Grand Total:"})
+
+
+def test_splits_compact_invoice_header_before_date_and_purchase_order() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {
+            "raw_text": (
+                "Invoice No.: 001319/26 Date : 01/04/2026 "
+                "P/O No.: 2026040106 F/P No.: 04002600145901720"
+            )
+        }
+    )
+
+    assert fields["document_number"]["value"] == "001319/26"
+    assert fields["transaction_date"]["value"] == "2026-04-01"
+
+
+def test_invoice_heading_allows_number_and_bare_inv_identifier() -> None:
+    number = FieldExtractionService().extract_from_ocr({"raw_text": "INVOICE\nNUMBER: 0345/INV/AB/IV/2026"})
+    bare = FieldExtractionService().extract_from_ocr({"raw_text": "INVOICE\n0496/INV/AB/V/2026"})
+
+    assert number["document_number"]["value"] == "0345/INV/AB/IV/2026"
+    assert bare["document_number"]["value"] == "0496/INV/AB/V/2026"
+
+
+def test_rejects_phone_and_delivery_order_as_invoice_candidates() -> None:
+    service = FieldExtractionService()
+    candidates = service.collect_document_candidates(
+        [{"raw_text": "INVOICE\nNo. Telp. (021) 82499470: No. Fax. (021) 82499479\nDO/164/04/2026"}],
+        "INV",
+    )
+
+    assert "document_number" not in candidates
+
+
+def test_does_not_pair_invoice_amount_with_distant_account_number() -> None:
+    candidates = FieldExtractionService().collect_document_candidates(
+        [
+            {
+                "tokens_json": [
+                    {"text": "IDR 5220305017", "bbox": [800, 2840, 1040, 2870]},
+                    {"text": "INVOICE AMOUNT", "bbox": [1570, 2580, 1880, 2610]},
+                ]
+            }
+        ]
+    )
+
+    assert "transaction_amount" not in candidates
+
+
+def test_rejects_delivery_order_number_as_amount_due() -> None:
+    fields = FieldExtractionService().extract_from_ocr({"raw_text": "Amount Due: D/O No: 26/04/KTY/0006"})
+
+    assert "transaction_amount" not in fields
+
+
+def test_prefers_grand_total_over_invoice_amount() -> None:
+    fields = FieldExtractionService().extract_from_ocr(
+        {"raw_text": "Invoice Amount: Rp 69.333.411\nGrand Total: Rp 76.960.086"}
+    )
+
+    assert fields["transaction_amount"]["value"] == 76_960_086.0

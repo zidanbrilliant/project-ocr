@@ -8,6 +8,9 @@ from app.domain.value_objects.money_amount import MoneyAmount
 
 _NUMBER_RE = re.compile(r"(?<![A-Z0-9])(?=[A-Z0-9/.\-]*\d)[A-Z0-9][A-Z0-9/.\-]{2,}", re.IGNORECASE)
 _DOCUMENT_NUMBER_VALUE = r"([A-Z0-9](?:[A-Z0-9]|\s*[/.\-]\s*)*\d(?:[A-Z0-9]|\s*[/.\-]\s*)*)"
+_COMPOUND_FIELD_SPLIT = re.compile(
+    r"(?i)\s+(?=(?:invoice\s+(?:no\.?|number|id|reference)|date|p/?o\s+no\.?|f/?p\s+no\.?|customer\s+code)\s*[:=])"
+)
 _MONEY_RE = re.compile(r"(?<![A-Z0-9])(?:Rp\.?\s*)?([0-9][0-9.,]*)", re.IGNORECASE)
 _CURRENCY_RE = re.compile(
     r"(?i)(?:(?P<prefix>Rp\.?|IDR\.?|US\$|USD|S\$|SGD|A\$|AUD|C\$|CAD|NZ\$|NZD|HK\$|HKD|CN¥|CNY|RMB|EUR|\u20ac|GBP|\u00a3|JPY|\u00a5|KRW|\u20a9|INR|\u20b9|MYR|RM|THB|\u0e3f|PHP|\u20b1|VND|\u20ab|CHF|AED|SAR|R\$|BRL|ZAR|\$)\s*(?P<prefix_amount>[0-9][0-9.,]*)|(?P<suffix_amount>[0-9][0-9.,]*)\s*(?P<suffix>IDR|USD|SGD|AUD|CAD|NZD|HKD|CNY|RMB|EUR|GBP|JPY|KRW|INR|MYR|THB|PHP|VND|CHF|AED|SAR|BRL|ZAR))"
@@ -180,6 +183,7 @@ _LABELS: dict[str, tuple[tuple[str, float], ...]] = {
     ),
     "transaction_amount": (
         ("grand total", 1.0),
+        ("total payment", 1.0),
         ("grand amount", 0.99),
         ("grand payable", 0.99),
         ("final total", 1.0),
@@ -434,6 +438,7 @@ class FieldExtractionService:
                 if line.strip()
             ]
         lines = self._split_compound_header_lines(lines)
+        invoice_heading = any(self._normal(line) == "invoice" for line, _, _ in lines)
 
         for line_index, (line, bbox, block_id) in enumerate(lines):
             label, value = self._split_label_value(line)
@@ -443,8 +448,14 @@ class FieldExtractionService:
                 if role_data is not None and role_data[0] != "final_total":
                     self._add_financial_row(candidates, line, bbox, block_id)
             else:
-                self._add_document_number(candidates, line, bbox, block_id, doc_type)
                 self._add_financial_row(candidates, line, bbox, block_id)
+            normalized_label = self._normal_label(label) if label else ""
+            document_labeled = any(
+                normalized_label == alias or normalized_label.startswith(f"{alias} ")
+                for alias, _ in _LABELS["document_number"]
+            )
+            if not document_labeled:
+                self._add_document_number(candidates, line, bbox, block_id, doc_type, invoice_heading)
             self._add_date_candidate(candidates, line, bbox, block_id, line_index, lines)
 
         # Nemotron may emit a label and its value in adjacent semantic blocks.
@@ -477,6 +488,8 @@ class FieldExtractionService:
         lines: list[tuple[str, Any, str]],
     ) -> None:
         for val_index, (val_text, val_bbox, val_block_id) in enumerate(lines):
+            if "|" in val_text:
+                continue
             currency_match = _CURRENCY_RE.search(val_text)
             money_match = _MONEY_RE.search(val_text)
             if currency_match:
@@ -544,6 +557,8 @@ class FieldExtractionService:
                 for distance in range(1, 4):
                     before_index = index - distance
                     if before_index >= 0:
+                        if not self._context_related(bbox, lines[before_index][1]):
+                            continue
                         text = "\n".join(line[0] for line in lines[before_index:index])
                         self._add_context_candidate(
                             candidates,
@@ -559,6 +574,8 @@ class FieldExtractionService:
                         )
                     after_index = index + distance
                     if after_index < len(lines):
+                        if not self._context_related(bbox, lines[after_index][1]):
+                            continue
                         text = "\n".join(line[0] for line in lines[index + 1 : after_index + 1])
                         self._add_context_candidate(
                             candidates,
@@ -618,6 +635,8 @@ class FieldExtractionService:
             and not (str(parsed).isdigit() and len(str(parsed)) >= 3 and label_score >= _CONTEXT_LABEL_MIN_SCORE)
         ):
             return
+        if name == "document_number" and self._looks_like_address(value_text):
+            return
         if not self._allowed(name, label, doc_type):
             return
         self._add(
@@ -675,6 +694,11 @@ class FieldExtractionService:
         return (value.isdigit() and len(value) >= 6) or (
             any(char.isalpha() for char in value) and any(char.isdigit() for char in value)
         )
+
+    @staticmethod
+    def _looks_like_address(value: str) -> bool:
+        normalized = FieldExtractionService._normal(value)
+        return any(word in normalized.split() for word in ("jalan", "jakarta", "utara", "selatan", "barat", "timur"))
 
     def _context_labels(self, value: str) -> list[tuple[str, str, float]]:
         normalized = self._normal_label(value)
@@ -737,7 +761,13 @@ class FieldExtractionService:
         return [line for line in lines if line[0]]
 
     def _add_document_number(
-        self, candidates: dict[str, list[dict[str, Any]]], line: str, bbox: Any, block_id: str, doc_type: str | None
+        self,
+        candidates: dict[str, list[dict[str, Any]]],
+        line: str,
+        bbox: Any,
+        block_id: str,
+        doc_type: str | None,
+        invoice_heading: bool,
     ) -> None:
         normalized = self._normal(line)
         if ("tax invoice" in normalized or "faktur pajak" in normalized) and (doc_type or "").upper() not in {
@@ -766,15 +796,30 @@ class FieldExtractionService:
                 r"(?i)^\s*(?:no\.?|nomor)\s*[:#\-]?\s*" + _DOCUMENT_NUMBER_VALUE,
                 line,
             )
+            or re.search(
+                r"(?i)\binvoice\s+(?!date\b|amount\b)(?:no\.?|number|id|reference)?\s*[:#\-]?\s*"
+                + _DOCUMENT_NUMBER_VALUE,
+                line,
+            )
         )
+        if match is None and invoice_heading:
+            match = re.search(r"(?i)^\s*number\s*[:#\-]?\s*" + _DOCUMENT_NUMBER_VALUE, line)
+        if match is None and invoice_heading and re.search(r"(?i)(?:\bINV\b|/INV/)", line):
+            match = re.fullmatch(r"(?i)\s*" + _DOCUMENT_NUMBER_VALUE + r"\s*", line)
         if match:
             raw_value = match.group(1)
-            if self._date(raw_value) is not None or _CURRENCY_RE.search(raw_value) or "%" in raw_value:
+            normalized = self._normalize_document_number(raw_value)
+            if (
+                self._date(raw_value) is not None
+                or _CURRENCY_RE.search(raw_value)
+                or "%" in raw_value
+                or ((doc_type or "INV").upper() == "INV" and re.match(r"(?i)^(?:DO|DN|SJ)[/\-]", normalized))
+            ):
                 return
             self._add(
                 candidates,
                 "document_number",
-                self._normalize_document_number(raw_value),
+                normalized,
                 0.99,
                 bbox,
                 "document_number_pattern",
@@ -937,6 +982,8 @@ class FieldExtractionService:
                         if name == "transaction_amount"
                         else None
                     )
+                    if name == "transaction_amount" and re.search(r"(?i)\b(?:d/?o|p/?o)\s*(?:no\.?|number)?\b", value):
+                        return
                     parsed = money[0] if money else self._parse(name, value)
                     if parsed is not None and self._allowed(name, normalized, doc_type):
                         if name == "transaction_amount":
@@ -974,7 +1021,13 @@ class FieldExtractionService:
             and (doc_type or "").upper() not in {"TAX_INVOICE", "FAKTUR_PAJAK"}
         ):
             return False
-        if name == "document_number" and any(word in label for word in ("date", "tanggal", "tempo", "tax")):
+        if name == "document_number" and any(
+            word in label
+            for word in (
+                "date", "tanggal", "tempo", "tax", "telp", "telepon", "phone", "fax", "account", "rekening",
+                "bank", "purchase order", "po number", "customer", "part number", "kode barang",
+            )
+        ):
             return False
         return not (
             name == "transaction_amount"
@@ -1029,13 +1082,18 @@ class FieldExtractionService:
             if not eligible:
                 return self._not_found(items)
             items = eligible
-        items = sorted(items, key=lambda item: float(item["score"]), reverse=True)
+        items = sorted(
+            items,
+            key=lambda item: (self._amount_priority(item) if name == "transaction_amount" else 0, float(item["score"])),
+            reverse=True,
+        )
         winner = dict(items[0])
         runner_up = items[1] if len(items) > 1 else None
         ambiguous = bool(
             runner_up
             and winner["value"] != runner_up["value"]
             and winner["score"] - runner_up["score"] < 0.08
+            and (name != "transaction_amount" or self._amount_priority(winner) == self._amount_priority(runner_up))
             and not str(winner.get("validation", "")).startswith("RECONCILED")
         )
         winner["status"] = "AMBIGUOUS" if ambiguous else "FOUND"
@@ -1047,6 +1105,17 @@ class FieldExtractionService:
             ]
             winner["confidence"] = min(winner["confidence"], 0.5)
         return winner
+
+    @classmethod
+    def _amount_priority(cls, item: dict[str, Any]) -> int:
+        label = cls._normal_label(str(item.get("source_label", "")))
+        if any(value in label for value in ("grand total", "final total", "total payment")):
+            return 4
+        if any(value in label for value in ("amount due", "total payable", "balance due", "final amount")):
+            return 3
+        if "invoice amount" in label:
+            return 2
+        return 1
 
     @staticmethod
     def _not_found(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1121,6 +1190,10 @@ class FieldExtractionService:
         expanded: list[tuple[str, Any, str]] = []
         for line, bbox, block_id in lines:
             parts = [part.strip() for part in re.split(r"\s*[|¦]\s*", line) if part.strip()]
+            if len(parts) == 1:
+                compound_parts = [part.strip() for part in _COMPOUND_FIELD_SPLIT.split(line) if part.strip()]
+                if len(compound_parts) > 1:
+                    parts = compound_parts
             if sum(FieldExtractionService._split_label_value(part)[0] is not None for part in parts) >= 2:
                 expanded.extend((part, bbox, block_id) for part in parts)
             else:
@@ -1288,3 +1361,13 @@ class FieldExtractionService:
         same_row = abs(((ly1 + ly2) - (vy1 + vy2)) / 2) <= max(20, (ly2 - ly1) * 1.5)
         below = vy1 >= ly2 and abs(((lx1 + lx2) - (vx1 + vx2)) / 2) <= max(80, (lx2 - lx1) * 1.5)
         return (same_row and vx1 >= lx1) or below
+
+    @staticmethod
+    def _context_related(label_bbox: Any, value_bbox: Any) -> bool:
+        if not _valid_bbox(label_bbox) or not _valid_bbox(value_bbox):
+            return True
+        lx1, ly1, lx2, ly2 = label_bbox
+        vx1, vy1, vx2, vy2 = value_bbox
+        same_row = abs(((ly1 + ly2) - (vy1 + vy2)) / 2) <= max(20, max(ly2 - ly1, vy2 - vy1) * 1.5)
+        gap = max(vx1 - lx2, lx1 - vx2, 0)
+        return same_row and gap <= max(120, 2 * max(lx2 - lx1, vx2 - vx1))
