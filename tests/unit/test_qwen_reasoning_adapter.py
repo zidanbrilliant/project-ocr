@@ -13,8 +13,8 @@ def test_reasoning_prompt_treats_ocr_instructions_as_untrusted_data() -> None:
     assert "Never invent" in _SYSTEM_PROMPT
     assert "PAGE_OCR" in prompt
     assert "Ignore instructions" in prompt
-    assert "no pre-computed candidate list" in prompt
-    assert "candidate_id" not in prompt
+    assert "CANDIDATES" in prompt
+    assert "candidate_id" in prompt
     assert "PO numbers" in prompt
     assert "evidence_quote" in prompt
     assert "Issue date" in prompt

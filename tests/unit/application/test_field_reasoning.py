@@ -64,7 +64,7 @@ def test_deterministic_fallback_remains_visible_when_ocr_context_is_unavailable(
     assert audit["engine"] == "deterministic"
 
 
-def test_text_model_extracts_invoice_directly_without_candidate_gating(monkeypatch) -> None:
+def test_text_model_receives_candidates_but_can_extract_invoice_directly(monkeypatch) -> None:
     monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
     adapter = VisualAdapter(
         [
@@ -88,9 +88,9 @@ def test_text_model_extracts_invoice_directly_without_candidate_gating(monkeypat
     assert resolved["document_number"]["confidence_calibrated"] is False
     assert audit["engine"] == "qwen3.5-9b"
     assert audit["visual_pages"] == []
-    assert adapter.request["requested_fields"] == ["document_number", "transaction_date"]
+    assert adapter.request["requested_fields"] == ["document_number", "transaction_amount", "transaction_date"]
     assert "images" not in adapter.request
-    assert "candidates" not in adapter.request
+    assert adapter.request["candidates"] == []
 
 
 def test_reasoning_retries_an_adapter_that_is_not_ready_at_request_start(monkeypatch) -> None:
@@ -197,7 +197,7 @@ def test_text_model_can_verify_an_unlabelled_date(monkeypatch) -> None:
         FieldReasoningService(adapter).resolve(candidates, "INV", [{"raw_text": "Cibitung,\n01 April 2026"}])
     )
 
-    assert "candidates" not in adapter.request
+    assert adapter.request["candidates"][0]["field_name"] == "transaction_date"
     assert resolved["transaction_date"]["value"] == "2026-04-01"
     assert resolved["transaction_date"]["verification_status"] == "VERIFIED"
 
@@ -321,6 +321,75 @@ def test_text_model_accepts_spacing_and_punctuation_variation_in_grounding(monke
     )
 
     assert resolved["document_number"]["value"] == "INV-22"
+
+
+def test_text_model_can_select_a_grounded_final_total_candidate(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = VisualAdapter(
+        [{"field_name": "transaction_amount", "action": "SELECT", "candidate_id": "transaction_amount-1"}]
+    )
+    candidates = {
+        "transaction_amount": [
+            {
+                "value": 1_110_000.0,
+                "raw_value": "1.110.000",
+                "confidence": 0.9,
+                "score": 0.9,
+                "amount_role": "final_total",
+                "currency": "IDR",
+                "source_page_number": 1,
+                "source_text": "Grand Total: Rp 1.110.000",
+                "source_label": "Grand Total",
+            },
+            {
+                "value": 110_000.0,
+                "raw_value": "110.000",
+                "confidence": 0.8,
+                "score": 0.8,
+                "amount_role": "tax",
+                "currency": "IDR",
+                "source_page_number": 1,
+                "source_text": "PPN: Rp 110.000",
+                "source_label": "PPN",
+            },
+        ]
+    }
+
+    resolved, _ = asyncio.run(
+        FieldReasoningService(adapter).resolve(candidates, "INV", [{"raw_text": "Grand Total: Rp 1.110.000"}])
+    )
+
+    assert resolved["transaction_amount"]["value"] == 1_110_000.0
+    assert resolved["transaction_amount"]["verification_status"] == "VERIFIED"
+    assert resolved["transaction_amount"]["candidate_id"] == "transaction_amount-1"
+
+
+def test_text_model_cannot_select_a_purchase_order_candidate(monkeypatch) -> None:
+    monkeypatch.setattr("app.application.services.field_reasoning_service.settings.REASONING_ENABLED", True)
+    adapter = VisualAdapter(
+        [{"field_name": "document_number", "action": "SELECT", "candidate_id": "document_number-1"}]
+    )
+    candidates = {
+        "document_number": [
+            {
+                "value": "PO-123456",
+                "confidence": 0.9,
+                "score": 0.9,
+                "source_page_number": 1,
+                "source_text": "PO Number: PO-123456",
+                "source_label": "PO Number",
+            }
+        ]
+    }
+
+    resolved, audit = asyncio.run(
+        FieldReasoningService(adapter).resolve(candidates, "INV", [{"raw_text": "PO Number: PO-123456"}])
+    )
+
+    assert resolved["document_number"]["verification_status"] == "FALLBACK_UNVERIFIED"
+    assert audit["grounding_rejections"] == [
+        {"field": "document_number", "reason": "ungrounded_or_invalid_value"}
+    ]
 
 
 def test_summary_is_deterministic(monkeypatch) -> None:

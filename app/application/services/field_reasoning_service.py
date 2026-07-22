@@ -12,14 +12,16 @@ _FIELD_DEFINITIONS = {
     "document_number": (
         "commercial invoice or document number, not a tax invoice number unless the document is tax invoice"
     ),
+    "transaction_amount": "final payable invoice amount, not subtotal, tax, discount, paid amount, or unit price",
     "transaction_date": "document issuance or invoice date",
 }
 
 _REASON_CODES = {
     "document_number": {"COMMERCIAL_DOCUMENT_NUMBER"},
+    "transaction_amount": {"FINAL_PAYABLE_TOTAL"},
     "transaction_date": {"DOCUMENT_ISSUE_DATE"},
 }
-_TEXT_FIELDS = ("document_number", "transaction_date")
+_CORE_FIELDS = ("document_number", "transaction_amount", "transaction_date")
 _GROUNDED_MODEL_CONFIDENCE = 0.85
 
 
@@ -53,19 +55,22 @@ class FieldReasoningService:
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
         fields = self._field_extractor.resolve_document_candidates(candidates)
         resolved = self._fallback_fields(fields, candidates)
-        text_fields = list(_TEXT_FIELDS)
+        core_fields = list(_CORE_FIELDS)
         document_context = self._document_context(pages or [])
         if not settings.REASONING_ENABLED:
-            return resolved, self._audit(False, "deterministic", text_fields, document_context)
+            return resolved, self._audit(False, "deterministic", core_fields, document_context)
         if not document_context:
-            return resolved, self._audit(False, "deterministic", text_fields, document_context)
+            return resolved, self._audit(False, "deterministic", core_fields, document_context)
 
+        model_candidates = self._model_candidates(candidates)
+        candidate_index = {item["candidate_id"]: item for item in model_candidates}
         started = monotonic()
         reply = await self._adapter.select(
             {
                 "document_type": doc_type,
-                "requested_fields": text_fields,
+                "requested_fields": core_fields,
                 "field_definitions": _FIELD_DEFINITIONS,
+                "candidates": model_candidates,
                 "page_ocr": document_context,
             }
         )
@@ -77,7 +82,9 @@ class FieldReasoningService:
                 rejected.append({"field": "unknown", "reason": "invalid_decision"})
                 continue
             name = decision.get("field_name")
-            item = self._grounded_candidate(decision, pages or [], doc_type)
+            if decision.get("action") == "ABSTAIN":
+                continue
+            item = self._grounded_candidate(decision, candidate_index, pages or [], doc_type)
             if item is None:
                 rejected.append({"field": str(name or "unknown"), "reason": "ungrounded_or_invalid_value"})
                 continue
@@ -106,7 +113,7 @@ class FieldReasoningService:
             )
             resolved[name] = chosen
             applied.append(name)
-        audit = self._audit(bool(applied), "qwen3.5-9b", text_fields, document_context)
+        audit = self._audit(bool(applied), "qwen3.5-9b", core_fields, document_context)
         audit.update(
             {
                 "adapter_available": self._adapter.is_available,
@@ -144,7 +151,7 @@ class FieldReasoningService:
     ) -> dict[str, dict[str, Any]]:
         """Keep deterministic evidence visible when Qwen is unavailable or rejects its response."""
         resolved = dict(fields)
-        for name in _TEXT_FIELDS:
+        for name in _CORE_FIELDS:
             field = fields.get(name, {})
             if field.get("value") is not None:
                 resolved[name] = {
@@ -177,15 +184,27 @@ class FieldReasoningService:
         return resolved
 
     def _grounded_candidate(
-        self, decision: dict[str, Any], pages: list[dict[str, Any]], doc_type: str
+        self,
+        decision: dict[str, Any],
+        candidate_index: dict[str, dict[str, Any]],
+        pages: list[dict[str, Any]],
+        doc_type: str,
     ) -> dict[str, Any] | None:
         name = decision.get("field_name")
+        candidate_id = decision.get("candidate_id")
+        if name not in _CORE_FIELDS:
+            return None
+        if isinstance(candidate_id, str):
+            candidate = candidate_index.get(candidate_id)
+            if candidate is None or candidate["field_name"] != name or not self._candidate_is_allowed(candidate):
+                return None
+            return dict(candidate)
+
         raw_value = decision.get("raw_value")
         evidence_quote = decision.get("evidence_quote")
         page_number = decision.get("page_number")
         if (
-            name not in _TEXT_FIELDS
-            or not isinstance(raw_value, str)
+            not isinstance(raw_value, str)
             or not isinstance(evidence_quote, str)
             or not isinstance(page_number, int)
             or not 1 <= page_number <= len(pages)
@@ -208,8 +227,46 @@ class FieldReasoningService:
         return item
 
     @staticmethod
+    def _model_candidates(candidates: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        """Keep Qwen choices grounded, while retaining its raw-OCR fallback."""
+        result: list[dict[str, Any]] = []
+        for name in _CORE_FIELDS:
+            for index, item in enumerate(candidates.get(name, []), start=1):
+                result.append(
+                    {
+                        "candidate_id": f"{name}-{index}",
+                        "field_name": name,
+                        "value": item.get("value"),
+                        "raw_value": item.get("raw_value"),
+                        "page_number": item.get("source_page_number"),
+                        "source_text": item.get("source_text"),
+                        "source_label": item.get("source_label"),
+                        "source_block_id": item.get("source_block_id"),
+                        "amount_role": item.get("amount_role"),
+                        "currency": item.get("currency"),
+                        "date_role": item.get("date_role"),
+                        "score": item.get("score"),
+                        "source_bbox": item.get("source_bbox"),
+                        "source_page_number": item.get("source_page_number"),
+                        "source_page_index": item.get("source_page_index"),
+                        "extraction_method": item.get("extraction_method"),
+                    }
+                )
+        return result
+
+    @staticmethod
+    def _candidate_is_allowed(candidate: dict[str, Any]) -> bool:
+        name = candidate["field_name"]
+        label = f"{candidate.get('source_label', '')} {candidate.get('source_text', '')}".casefold()
+        if name == "document_number":
+            return not re.search(r"\b(?:po|purchase order|npwp|tax id|customer|kode barang|part number)\b", label)
+        if name == "transaction_amount":
+            return candidate.get("amount_role") == "final_total"
+        return candidate.get("date_role") not in {"due_date", "payment_date", "print_date", "tax_period"}
+
+    @staticmethod
     def _document_context(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Pass every OCR page in document order; candidates are audit-only."""
+        """Pass every OCR page in document order for open-set grounded fallback."""
         return [
             {"page_number": page_number, "raw_text": raw_text}
             for page_number, page in enumerate(pages, start=1)

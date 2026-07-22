@@ -300,6 +300,7 @@ def _field_entries(fields: dict[str, Any], page_number: int | None) -> list[dict
                 "source_text": field.get("source_text"),
                 "source_label": field.get("source_label"),
                 "source_block_id": field.get("source_block_id"),
+                "candidate_id": field.get("candidate_id"),
                 "source_bbox": field.get("source_bbox"),
                 "extraction_method": field.get("extraction_method", field.get("method")),
                 "reason_code": field.get("reason_code"),
