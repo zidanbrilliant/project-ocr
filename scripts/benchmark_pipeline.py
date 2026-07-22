@@ -80,10 +80,13 @@ async def benchmark(
     doc_type: str,
     ground_truth: dict[str, dict] | None = None,
     include_trace: bool = False,
+    limit: int | None = None,
 ) -> dict:
     from scripts.direct_processor import DirectProcessor
 
     files = sorted(path for path in input_dir.rglob("*") if path.suffix.lower() in SUPPORTED)
+    if limit is not None:
+        files = files[:limit]
     if not files:
         raise SystemExit(f"No PDF/JPG/PNG files found in {input_dir}")
 
@@ -188,9 +191,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("artifacts/benchmark.json"))
     parser.add_argument("--ground-truth", type=Path, help="JSON/JSONL rows with file_name and fields")
     parser.add_argument("--include-trace", action="store_true", help="Include OCR, candidates, fields, and reasoning")
+    parser.add_argument("--limit", type=int, help="Process only the first N sorted files")
     args = parser.parse_args()
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be at least 1")
     ground_truth = load_ground_truth(args.ground_truth) if args.ground_truth else None
-    report = asyncio.run(benchmark(args.input_dir, args.doc_type, ground_truth, args.include_trace))
+    report = asyncio.run(benchmark(args.input_dir, args.doc_type, ground_truth, args.include_trace, args.limit))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps({key: value for key, value in report.items() if key != "results"}, indent=2))
