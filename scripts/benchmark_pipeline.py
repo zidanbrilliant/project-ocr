@@ -92,8 +92,9 @@ async def benchmark(
     started = time.perf_counter()
     results = []
     total_pages = 0
-    for path in files:
+    for index, path in enumerate(files, start=1):
         document_started = time.perf_counter()
+        print(f"[{index}/{len(files)}] {path.name} | processing", flush=True)
         result = await processor.process(path.read_bytes(), path.name, doc_type)
         pages = len(result.get("pages", []))
         total_pages += pages
@@ -130,6 +131,7 @@ async def benchmark(
                 ],
             }
         results.append(row)
+        print(f"[{index}/{len(files)}] {path.name} | {row['duration_ms']} ms", flush=True)
 
     duration = time.perf_counter() - started
     labeled = [item["evaluation"] for item in results if "evaluation" in item]
