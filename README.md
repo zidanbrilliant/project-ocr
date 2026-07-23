@@ -1,8 +1,34 @@
 # Vision AI - Invoice Verification Agent Service
 
-AI service for Toyota invoice and delivery-note verification. The testing flow is Streamlit upload first; RabbitMQ and PostgreSQL are kept for production mode.
+AI service for Toyota invoice and delivery-note verification. Local Streamlit
+and benchmark flows exercise the shared processing service without connecting
+RabbitMQ or PostgreSQL.
 
-## Testing Mode
+## Local End-to-End Testing
+
+Start the Streamlit background-job tester from the repository root:
+
+```bash
+streamlit run scripts/upload_app.py
+```
+
+Streamlit submits uploads to an in-memory local job, polls its progress, and
+displays the validated canonical JSON result. This tests the local model
+pipeline; it is not a RabbitMQ or PostgreSQL integration test.
+
+Run the labeled field and YOLO validation benchmark with:
+
+```bash
+python scripts/benchmark_pipeline.py "dataset groundtruth" --ground-truth "dataset groundtruth/ground_truth.json" --yolo-dataset-root "dataset yolo" --output artifacts/benchmark-local.json --require-yolo-gate
+```
+
+The command writes `artifacts/benchmark-local.json` before returning the gate
+result. Exit code `0` means all requested 85% field and 90% YOLO gates pass;
+exit code `2` means the report was written but at least one requested gate
+failed. Barcode decoding and color inspection remain output-only with
+no acceptance gate until labeled ground truth exists.
+
+## DGX Docker Testing
 
 ```bash
 cp .env.example .env
