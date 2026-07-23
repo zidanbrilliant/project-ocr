@@ -29,21 +29,25 @@ class RuleConfig:
     min_object_confidence: float = 0.25
 
 
+def default_rule_config() -> RuleConfig:
+    return RuleConfig(
+        require_invoice_number=settings.REQUIRE_INVOICE_NUMBER,
+        require_signature=settings.REQUIRE_SIGNATURE_FOR_INVOICE,
+        require_stamp=settings.REQUIRE_STAMP_FOR_INVOICE,
+        require_barcode=settings.REQUIRE_BARCODE_FOR_INVOICE,
+        require_colored_document=settings.REQUIRE_COLORED_DOCUMENT,
+        amount_stamp_duty_threshold=settings.AMOUNT_STAMP_DUTY_THRESHOLD,
+        require_materai_above_threshold=settings.REQUIRE_MATERAI_ABOVE_THRESHOLD,
+        required_signature_count=settings.DELIVERY_NOTE_REQUIRED_SIGNATURE_COUNT,
+        required_stamp_count=settings.DELIVERY_NOTE_REQUIRED_STAMP_COUNT,
+        confidence_threshold=settings.CONFIDENCE_THRESHOLD,
+        amount_match_tolerance=settings.AMOUNT_MATCH_TOLERANCE,
+    )
+
+
 class BusinessRuleEvaluator:
     def __init__(self, config: RuleConfig | None = None) -> None:
-        self._config = config or RuleConfig(
-            require_invoice_number=settings.REQUIRE_INVOICE_NUMBER,
-            require_signature=settings.REQUIRE_SIGNATURE_FOR_INVOICE,
-            require_stamp=settings.REQUIRE_STAMP_FOR_INVOICE,
-            require_barcode=settings.REQUIRE_BARCODE_FOR_INVOICE,
-            require_colored_document=settings.REQUIRE_COLORED_DOCUMENT,
-            amount_stamp_duty_threshold=settings.AMOUNT_STAMP_DUTY_THRESHOLD,
-            require_materai_above_threshold=settings.REQUIRE_MATERAI_ABOVE_THRESHOLD,
-            required_signature_count=settings.DELIVERY_NOTE_REQUIRED_SIGNATURE_COUNT,
-            required_stamp_count=settings.DELIVERY_NOTE_REQUIRED_STAMP_COUNT,
-            confidence_threshold=settings.CONFIDENCE_THRESHOLD,
-            amount_match_tolerance=settings.AMOUNT_MATCH_TOLERANCE,
-        )
+        self._config = config or default_rule_config()
 
     def validate_invoice(
         self,

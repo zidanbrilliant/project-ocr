@@ -194,3 +194,77 @@ Follow-up commit subject:
 ```text
 fix: preserve production color policy and failed local results
 ```
+
+## Settings-Preservation Follow-up
+
+The final review identified that constructing
+`RuleConfig(require_colored_document=False)` also replaced settings-derived
+local policy values with dataclass defaults. The regression now verifies that
+`DirectProcessor` keeps:
+
+- `REQUIRE_INVOICE_NUMBER`
+- `CONFIDENCE_THRESHOLD`
+- `REQUIRE_STAMP_FOR_INVOICE`
+- `REQUIRE_MATERAI_ABOVE_THRESHOLD`
+- `AMOUNT_STAMP_DUTY_THRESHOLD`
+- `AMOUNT_MATCH_TOLERANCE`
+
+while changing only `require_colored_document` to `False`. Signature, barcode,
+delivery-note counts, and every other default-evaluator value come from the
+same shared settings-derived `RuleConfig` builder.
+
+### TDD Evidence
+
+The extended local-policy regression failed before implementation:
+
+```text
+FAILED test_direct_processor_disables_color_rule_only_for_local_flow
+assert True == False
+where require_invoice_number=True
+and settings.REQUIRE_INVOICE_NUMBER=False
+```
+
+The implementation extracts the existing settings mapping into
+`default_rule_config()` and uses:
+
+```text
+replace(default_rule_config(), require_colored_document=False)
+```
+
+Focused GREEN:
+
+```text
+pytest -q \
+  tests/unit/test_direct_processor.py::test_direct_processor_disables_color_rule_only_for_local_flow \
+  tests/unit/domain/test_business_rules.py
+11 passed, 1 warning
+```
+
+Final verification:
+
+```text
+pytest -q
+162 passed, 2 warnings
+
+python -m compileall -q app scripts tests
+exit 0
+
+python -m ruff check \
+  app/domain/services/business_rule_evaluator.py \
+  scripts/direct_processor.py \
+  tests/unit/test_direct_processor.py \
+  --ignore E501,I001,F401,SIM102
+All checks passed!
+
+git diff --check
+no whitespace errors
+```
+
+The ignored Ruff rules are pre-existing findings in the legacy business-rule
+module; the changed config-builder and local override lines are clean.
+
+Final follow-up commit subject:
+
+```text
+fix: preserve local rule settings when disabling color
+```

@@ -58,7 +58,30 @@ def test_direct_processor_disables_color_rule_only_for_local_flow(
 
     processor = dp.DirectProcessor()
 
-    assert processor._rule_evaluator._config.require_colored_document is False
+    config = processor._rule_evaluator._config
+    assert config.require_colored_document is False
+    assert config.require_invoice_number == dp.settings.REQUIRE_INVOICE_NUMBER
+    assert config.confidence_threshold == dp.settings.CONFIDENCE_THRESHOLD
+    assert config.require_signature == dp.settings.REQUIRE_SIGNATURE_FOR_INVOICE
+    assert config.require_stamp == dp.settings.REQUIRE_STAMP_FOR_INVOICE
+    assert config.require_barcode == dp.settings.REQUIRE_BARCODE_FOR_INVOICE
+    assert (
+        config.require_materai_above_threshold
+        == dp.settings.REQUIRE_MATERAI_ABOVE_THRESHOLD
+    )
+    assert (
+        config.amount_stamp_duty_threshold
+        == dp.settings.AMOUNT_STAMP_DUTY_THRESHOLD
+    )
+    assert (
+        config.required_signature_count
+        == dp.settings.DELIVERY_NOTE_REQUIRED_SIGNATURE_COUNT
+    )
+    assert (
+        config.required_stamp_count
+        == dp.settings.DELIVERY_NOTE_REQUIRED_STAMP_COUNT
+    )
+    assert config.amount_match_tolerance == dp.settings.AMOUNT_MATCH_TOLERANCE
 
 
 def test_pdf_text_falls_back_when_page_ocr_is_blank(monkeypatch: pytest.MonkeyPatch) -> None:
