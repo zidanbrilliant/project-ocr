@@ -5,11 +5,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import mimetypes
 import time
 from pathlib import Path
+from typing import Any
+
+from app.application.services.local_execution_service import LocalExecutionService
+from app.application.services.local_runtime import LocalDocument
+from app.application.services.model_evaluation_service import (
+    evaluate_candidate_recall,
+    evaluate_fields,
+    summarize_field_evaluations,
+)
+from app.shared.config.settings import settings
 
 SUPPORTED = {".pdf", ".png", ".jpg", ".jpeg"}
-CORE_FIELDS = ("document_number", "transaction_amount", "transaction_date")
 
 
 def load_ground_truth(path: Path) -> dict[str, dict]:
@@ -30,51 +40,6 @@ def load_ground_truth(path: Path) -> dict[str, dict]:
     }
 
 
-def evaluate_fields(result: dict, expected: dict) -> dict:
-    fields = result.get("fields", {})
-    checks: dict[str, bool] = {}
-    for name in CORE_FIELDS:
-        if name not in expected:
-            continue
-        actual = fields.get(name, {}).get("value")
-        target = expected[name]
-        target_value = target.get("value") if isinstance(target, dict) else target
-        matches = _values_match(actual, target_value)
-        if matches and isinstance(target, dict) and target.get("currency"):
-            matches = fields.get(name, {}).get("currency") == target["currency"]
-        checks[name] = matches
-    return {"checks": checks, "all_core_fields_exact": bool(checks) and all(checks.values())}
-
-
-def evaluate_candidate_recall(result: dict, expected: dict) -> dict[str, bool]:
-    """Report whether the correct non-null value existed before final selection."""
-    audit = result.get("field_candidate_audit", {})
-    checks: dict[str, bool] = {}
-    for name in CORE_FIELDS:
-        if name not in expected:
-            continue
-        target = expected[name]
-        target_value = target.get("value") if isinstance(target, dict) else target
-        if target_value is None:
-            continue
-        expected_currency = target.get("currency") if isinstance(target, dict) else None
-        checks[name] = any(
-            _values_match(candidate.get("value"), target_value)
-            and (not expected_currency or candidate.get("currency") == expected_currency)
-            for candidate in audit.get(name, [])
-            if isinstance(candidate, dict)
-        )
-    return checks
-
-
-def _values_match(actual: object, expected: object) -> bool:
-    if actual is None or expected is None:
-        return actual is expected
-    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
-        return abs(float(actual) - float(expected)) <= 0.01
-    return str(actual).strip().upper() == str(expected).strip().upper()
-
-
 async def benchmark(
     input_dir: Path,
     doc_type: str,
@@ -82,86 +47,79 @@ async def benchmark(
     include_trace: bool = False,
     limit: int | None = None,
 ) -> dict:
-    from scripts.direct_processor import DirectProcessor
-
     files = sorted(path for path in input_dir.rglob("*") if path.suffix.lower() in SUPPORTED)
     if limit is not None:
         files = files[:limit]
     if not files:
         raise SystemExit(f"No PDF/JPG/PNG files found in {input_dir}")
 
-    processor = DirectProcessor()
-    await processor.warmup()
+    service = LocalExecutionService()
     started = time.perf_counter()
-    results = []
+    results: list[dict[str, Any]] = []
+    labeled_rows: list[dict[str, Any]] = []
     total_pages = 0
     for index, path in enumerate(files, start=1):
         document_started = time.perf_counter()
         print(f"[{index}/{len(files)}] {path.name} | processing", flush=True)
-        result = await processor.process(path.read_bytes(), path.name, doc_type)
-        pages = len(result.get("pages", []))
+        snapshot = await service.run_inline(
+            [
+                LocalDocument(
+                    name=path.name,
+                    content_type=mimetypes.guess_type(path.name)[0]
+                    or "application/octet-stream",
+                    content=path.read_bytes(),
+                    doc_type=doc_type,
+                )
+            ]
+        )
+        envelope = snapshot.result or {}
+        document = next(iter(envelope.get("documents", [])), {})
+        pages = len(document.get("pages", []))
         total_pages += pages
+        expected = (ground_truth or {}).get(path.name)
+        evaluation = evaluate_fields(document, expected or {})
         row = {
             "file": str(path),
-            "status": result.get("status"),
+            "file_name": path.name,
+            "status": document.get("processing_status", snapshot.status),
             "pages": pages,
             "duration_ms": round((time.perf_counter() - document_started) * 1000),
-            "error": result.get("error"),
+            "error": _snapshot_error(snapshot, envelope, document),
+            "expected": expected,
+            "actual": evaluation["actual"],
+            "checks": evaluation["checks"],
         }
-        expected = (ground_truth or {}).get(path.name)
         if expected is not None:
-            row["evaluation"] = evaluate_fields(result, expected)
-            row["candidate_recall"] = evaluate_candidate_recall(result, expected)
+            row["candidate_recall"] = evaluate_candidate_recall(document, expected)
+            labeled_rows.append(row)
         if include_trace:
             row["trace"] = {
-                "fields": result.get("fields", {}),
-                "field_candidate_audit": result.get("field_candidate_audit", {}),
-                "reasoning": result.get("reasoning", {}),
+                "fields": document.get("fields", []),
+                "field_candidate_audit": document.get("field_candidate_audit", {}),
+                "reasoning": document.get("reasoning", {}),
                 "ocr_pages": [
                     {
-                        key: page.get(key)
-                        for key in (
-                            "engine_name",
-                            "raw_text",
-                            "tokens_json",
-                            "average_confidence",
-                            "processing_time_ms",
-                            "error",
-                        )
-                        if page.get(key) is not None
+                        "page_number": page.get("page_number"),
+                        **{
+                            key: page.get("ocr", {}).get(key)
+                            for key in (
+                                "engine",
+                                "raw_text",
+                                "average_confidence",
+                                "duration_ms",
+                                "text_blocks",
+                                "error",
+                            )
+                            if page.get("ocr", {}).get(key) is not None
+                        },
                     }
-                    for page in result.get("_page_ocrs", [])
+                    for page in document.get("pages", [])
                 ],
             }
         results.append(row)
         print(f"[{index}/{len(files)}] {path.name} | {row['duration_ms']} ms", flush=True)
 
     duration = time.perf_counter() - started
-    labeled = [item["evaluation"] for item in results if "evaluation" in item]
-    field_metrics = {
-        name: {
-            "evaluated": sum(name in item["checks"] for item in labeled),
-            "exact_matches": sum(item["checks"].get(name, False) for item in labeled),
-        }
-        for name in CORE_FIELDS
-    }
-    for metric in field_metrics.values():
-        metric["exact_match_rate"] = (
-            round(metric["exact_matches"] / metric["evaluated"], 4) if metric["evaluated"] else None
-        )
-
-    candidate_metrics = {
-        name: {
-            "evaluated": sum(name in item.get("candidate_recall", {}) for item in results),
-            "correct_candidates": sum(item.get("candidate_recall", {}).get(name, False) for item in results),
-        }
-        for name in CORE_FIELDS
-    }
-    for metric in candidate_metrics.values():
-        metric["recall"] = (
-            round(metric["correct_candidates"] / metric["evaluated"], 4) if metric["evaluated"] else None
-        )
-
     return {
         "documents": len(files),
         "pages": total_pages,
@@ -169,19 +127,26 @@ async def benchmark(
         "documents_per_hour": round(len(files) / duration * 3600, 2),
         "pages_per_minute": round(total_pages / duration * 60, 2),
         "failed_documents": sum(bool(item["error"]) for item in results),
-        "accuracy": {
-            "labeled_documents": len(labeled),
-            "field_metrics": field_metrics,
-            "candidate_metrics": candidate_metrics,
-            "all_core_fields_exact": sum(item["all_core_fields_exact"] for item in labeled),
-            "all_core_fields_exact_rate": round(
-                sum(item["all_core_fields_exact"] for item in labeled) / len(labeled), 4
-            )
-            if labeled
-            else None,
-        },
+        "accuracy": summarize_field_evaluations(
+            labeled_rows,
+            settings.FIELD_EXACT_MATCH_THRESHOLD,
+        ),
         "results": results,
     }
+
+
+def _snapshot_error(
+    snapshot: Any,
+    envelope: dict[str, Any],
+    document: dict[str, Any],
+) -> str | None:
+    if snapshot.error:
+        return snapshot.error
+    errors = document.get("errors") or envelope.get("errors") or []
+    if not errors:
+        return None
+    first = errors[0]
+    return str(first.get("message", first)) if isinstance(first, dict) else str(first)
 
 
 def main() -> None:
