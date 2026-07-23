@@ -75,7 +75,13 @@ def build_result_envelope(
         "response_source": "AI Verification Service",
         "overall_result": overall,
         "processing_status": status,
-        "processing_result": "SUCCESS" if not errors else "PARTIAL_SUCCESS",
+        "processing_result": (
+            "FAILED"
+            if status == "FAILED"
+            else "PARTIAL_SUCCESS"
+            if errors
+            else "SUCCESS"
+        ),
         "ai_confidence": overall_confidence,
         "ai_confidence_level": confidence_level,
         "confidence_threshold": confidence_threshold,

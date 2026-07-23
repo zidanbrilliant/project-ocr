@@ -148,6 +148,21 @@ def test_run_inline_treats_returned_processor_error_as_failed_document() -> None
     assert snapshot.result["header"]["processing_result"] == "PARTIAL_SUCCESS"
 
 
+def test_run_inline_marks_all_failed_result_envelope_failed() -> None:
+    snapshot = asyncio.run(
+        LocalExecutionService(
+            processor=RecordingProcessor(failing_name="only.png")
+        ).run_inline([document("only.png")])
+    )
+
+    assert snapshot.status == "FAILED"
+    assert snapshot.result is not None
+    assert snapshot.result["header"]["processing_status"] == "FAILED"
+    assert snapshot.result["header"]["processing_result"] == "FAILED"
+    assert snapshot.result["processing"]["status"] == "FAILED"
+    assert snapshot.result["documents"][0]["processing_status"] == "FAILED"
+
+
 class BlockingProcessor:
     def __init__(self) -> None:
         self.started = threading.Event()

@@ -10,8 +10,9 @@ models, dependencies, or external integrations:
   `status: NOT_FOUND`; an absent field or a null value without that status is
   a mismatch.
 - Color evidence remains present in raw and canonical output with
-  `evaluation_status: not_evaluated`, while the local default and example
-  configuration disable color as a business-validation rule.
+  `evaluation_status: not_evaluated`. The shared production default and
+  example configuration still require color; only `DirectProcessor` injects
+  a local rule configuration that disables color validation.
 - Page `ai_note` text reports `barcode decoded`, `barcode found`, or
   `barcode not found` exclusively from barcode item flags.
 - The in-memory local runtime reports `FAILED` when every document failed and
@@ -107,4 +108,89 @@ Planned commit subject:
 
 ```text
 fix: address final branch review findings
+```
+
+## Final Follow-up Review
+
+Two additional review findings were fixed:
+
+- Restored `REQUIRE_COLORED_DOCUMENT=true` in shared settings and
+  `.env.example`. `DirectProcessor` now explicitly injects
+  `RuleConfig(require_colored_document=False)`, leaving worker/orchestrator
+  construction on the configurable production evaluator.
+- Local execution now derives a terminal envelope status from document
+  outcomes. When all documents fail, the snapshot, header processing status,
+  header processing result, and envelope processing status are all `FAILED`.
+  Mixed outcomes remain `PARTIAL_SUCCESS`.
+- Streamlit now renders a stored failed-job envelope through the normal
+  per-document detail/JSON path. The generic failure message is used only when
+  a failed job has no stored result, such as a warmup or infrastructure
+  failure.
+
+### Follow-up TDD Evidence
+
+The initial focused RED run produced three expected failures:
+
+```text
+3 failed, 1 passed
+```
+
+The local `DirectProcessor` policy test initially passed only because the
+shared setting was still incorrectly false. After restoring the production
+default first, it independently went RED:
+
+```text
+1 failed, 1 passed
+FAILED test_direct_processor_disables_color_rule_only_for_local_flow
+```
+
+After local policy injection and failed-result rendering were implemented:
+
+```text
+pytest -q \
+  tests/unit/domain/test_business_rules.py::test_production_default_policy_still_requires_colored_documents \
+  tests/unit/test_direct_processor.py::test_direct_processor_disables_color_rule_only_for_local_flow \
+  tests/unit/application/test_local_execution_service.py::test_run_inline_marks_all_failed_result_envelope_failed \
+  tests/unit/test_upload_app.py
+5 passed, 1 warning
+```
+
+### Follow-up Verification
+
+```text
+pytest -q tests/unit/domain/test_business_rules.py \
+  tests/unit/test_direct_processor.py \
+  tests/unit/application/test_local_execution_service.py \
+  tests/unit/application/test_result_builder.py \
+  tests/unit/test_upload_app.py \
+  tests/integration/test_local_e2e.py
+31 passed, 1 warning
+
+pytest -q
+162 passed, 2 warnings
+
+python -m compileall -q app scripts tests
+exit 0
+
+python -m ruff check \
+  app/shared/config/settings.py \
+  app/application/services/local_execution_service.py \
+  app/application/services/result_builder.py \
+  scripts/direct_processor.py \
+  scripts/upload_app.py \
+  tests/unit/domain/test_business_rules.py \
+  tests/unit/test_direct_processor.py \
+  tests/unit/application/test_local_execution_service.py \
+  tests/unit/test_upload_app.py \
+  --ignore E501
+All checks passed!
+
+git diff --check
+no whitespace errors
+```
+
+Follow-up commit subject:
+
+```text
+fix: preserve production color policy and failed local results
 ```

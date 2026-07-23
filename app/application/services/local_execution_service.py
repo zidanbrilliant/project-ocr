@@ -105,9 +105,17 @@ class LocalExecutionService:
                 settled,
                 documents,
             )
+            completion_status = (
+                "FAILED"
+                if errors and len(errors) == len(result_documents)
+                else "PARTIAL_SUCCESS"
+                if errors
+                else "SUCCEEDED"
+            )
             envelope = build_result_envelope(
                 result_documents,
                 int((time.monotonic() - started_at) * 1000),
+                status=completion_status,
                 errors=errors,
                 queue_id=job_id,
                 correlation_id=job_id,

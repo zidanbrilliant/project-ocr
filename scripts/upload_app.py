@@ -9,7 +9,7 @@ import numpy as np
 import streamlit as st
 
 from app.application.services.local_execution_service import LocalExecutionService
-from app.application.services.local_runtime import LocalDocument
+from app.application.services.local_runtime import LocalDocument, LocalJobSnapshot
 from app.shared.config.settings import settings
 from scripts.direct_processor import DirectProcessor
 from scripts.result_adapter import normalize_result_envelope_for_ui
@@ -110,29 +110,35 @@ def main_ui() -> None:
                 st.rerun()
             return
 
+        _render_finished_job(snapshot, job_id)
+
+
+def _render_finished_job(snapshot: LocalJobSnapshot, job_id: str) -> None:
+    if snapshot.result is None:
         if snapshot.status == "FAILED":
             st.error(snapshot.error or "Local processing failed.")
-            return
-
-        if snapshot.result is None:
+        else:
             st.error(f"Job {job_id} finished without a result.")
-            return
+        return
 
-        ui_results = normalize_result_envelope_for_ui(snapshot.result)
-        if not ui_results:
-            st.error("The completed result contains no documents.")
-            return
+    ui_results = normalize_result_envelope_for_ui(snapshot.result)
+    if not ui_results:
+        st.error("The completed result contains no documents.")
+        return
 
-        selected_document = st.selectbox(
-            "Document",
-            options=list(range(len(ui_results))),
-            format_func=lambda index: ui_results[index]["document"].get("file_name", f"Document {index + 1}"),
-        )
-        ui_result = ui_results[selected_document]
-        _display_results(ui_result)
-        if len(ui_results) > 1:
-            with st.expander("Combined RabbitMQ preview"):
-                st.json(snapshot.result)
+    selected_document = st.selectbox(
+        "Document",
+        options=list(range(len(ui_results))),
+        format_func=lambda index: ui_results[index]["document"].get(
+            "file_name",
+            f"Document {index + 1}",
+        ),
+    )
+    ui_result = ui_results[selected_document]
+    _display_results(ui_result)
+    if len(ui_results) > 1:
+        with st.expander("Combined RabbitMQ preview"):
+            st.json(snapshot.result)
 
 
 def _render_model_status(processor: DirectProcessor) -> None:

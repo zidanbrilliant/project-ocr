@@ -5,7 +5,7 @@ from typing import Any
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
 from app.application.services.field_reasoning_service import FieldReasoningService
-from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator
+from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator, RuleConfig
 from app.domain.services.remark_policy import RemarkPolicy
 from app.domain.value_objects.confidence_score import ConfidenceScore
 from app.infrastructure.barcode.barcode_fallback_chain import BarcodeFallbackChain
@@ -42,7 +42,9 @@ class DirectProcessor:
         self._preprocessor = ImagePreprocessor()
         self._field_extractor = FieldExtractionService()
         self._field_reasoning = FieldReasoningService(field_extractor=self._field_extractor)
-        self._rule_evaluator = BusinessRuleEvaluator()
+        self._rule_evaluator = BusinessRuleEvaluator(
+            RuleConfig(require_colored_document=False)
+        )
         self._conf_scorer = ConfidenceScoringService()
         self._remark = RemarkPolicy()
 

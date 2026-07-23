@@ -81,8 +81,8 @@ def test_default_invoice_policy_allows_missing_invoice_number_when_disabled(monk
     assert "INV-R001" not in {item.rule_id for item in result.failed_rules}
 
 
-def test_local_default_policy_keeps_color_output_only() -> None:
-    assert Settings(_env_file=None).REQUIRE_COLORED_DOCUMENT is False
+def test_production_default_policy_still_requires_colored_documents() -> None:
+    assert Settings(_env_file=None).REQUIRE_COLORED_DOCUMENT is True
 
 
 def test_invoice_missing_materai_above_threshold(evaluator: BusinessRuleEvaluator) -> None:
