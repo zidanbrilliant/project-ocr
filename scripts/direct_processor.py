@@ -1,6 +1,5 @@
 import asyncio
 import time
-from datetime import datetime
 from typing import Any
 
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
@@ -20,7 +19,7 @@ from app.infrastructure.document_converter.image_preprocessor import ImagePrepro
 from app.infrastructure.document_converter.pdf_renderer import PDFRenderer
 from app.infrastructure.ocr.document_ocr import DocumentOCR
 from app.shared.config.settings import settings
-from app.shared.constants import return_codes, statuses
+from app.shared.constants import statuses
 from app.shared.exceptions.base import DocumentError
 from app.shared.logging.logger import get_logger, setup_logging
 
@@ -398,11 +397,6 @@ class DirectProcessor:
 
             elapsed_ms = int((time.monotonic() - start) * 1000)
             result["processing_time_ms"] = elapsed_ms
-            if settings.ENABLE_DATABASE:
-                try:
-                    await self._save_to_db(result, file_bytes, filename, doc_type)
-                except Exception as e:
-                    logger.warning("db_save_failed", error=str(e))
 
         except DocumentError as e:
             result["status"] = statuses.NG
@@ -428,140 +422,6 @@ class DirectProcessor:
         if ocr_entity.billing_confidence is not None:
             scores.append(ocr_entity.billing_confidence)
         return sum(scores) / len(scores) if scores else 0.0
-
-    async def _save_to_db(self, result: dict[str, Any], file_bytes: bytes, filename: str, doc_type: str) -> None:
-        import uuid as uuid_mod
-
-        from app.domain.entities.ai_job import AIJob as AIJobEntity
-        from app.domain.entities.final_result import FinalResult
-        from app.infrastructure.database.repositories.ai_job_postgres_repository import AIJobPostgresRepository
-        from app.infrastructure.database.repositories.result_postgres_repository import ResultPostgresRepository
-        from app.infrastructure.database.session import async_session_factory
-        from app.shared.utils.hash import build_idempotency_key
-
-        job_id = uuid_mod.uuid4()
-        queue_id = f"ST-{uuid_mod.uuid4().hex[:8]}"
-        page_images = result.get("_page_ocrs", [])
-        page_bcs = result.get("_page_bcs", [])
-        all_dets = result.get("detections", [])
-        total_conf = result.get("confidence", {}).get("total")
-        overall = result.get("status", statuses.NG)
-        remark = result.get("remarks", "")
-        doc_info = result.get("document_info", {})
-        ext = doc_info.get("extension", "")
-
-        async with async_session_factory() as session:
-            job_repo = AIJobPostgresRepository(session)
-            result_repo = ResultPostgresRepository(session)
-            # ponytail: queue_id = ST-{random} so idempotency key won't collide
-            idempotency_key = build_idempotency_key(
-                f"streamlit-{uuid_mod.uuid4()}", doc_type, 1, filename, file_bytes.hex()[:64]
-            )
-            job = AIJobEntity(
-                job_id=job_id,
-                queue_id=queue_id,
-                idempotency_key=idempotency_key,
-                doc_no=f"STL-{uuid_mod.uuid4().hex[:8]}",
-                doc_type=doc_type,
-                doc_seq=1,
-                trans_type_cd="STREAMLIT",
-                file_nm=filename,
-                ai_scan_app="STREAMLIT",
-                path_file="local",
-                processing_status=statuses.COMPLETED,
-                overall_result=overall,
-                request_datetime=datetime.utcnow(),
-                start_datetime=datetime.utcnow(),
-                finish_datetime=datetime.utcnow(),
-                duration_ms=result.get("processing_time_ms", 0),
-            )
-            await job_repo.save(job)
-
-            pk = await result_repo.save_document(
-                job_id,
-                {
-                    "document_id": "DOC-001",
-                    "document_name": filename,
-                    "document_type": doc_type,
-                    "file_extension": ext,
-                    "file_size_bytes": doc_info.get("size_bytes"),
-                    "page_count": doc_info.get("page_count", len(page_images)),
-                    "readable": True,
-                    "validation_status": "VALID",
-                },
-            )
-
-            for i, po in enumerate(page_images):
-                await result_repo.save_ocr(
-                    job_id,
-                    pk,
-                    {
-                        "page_number": i + 1,
-                        "engine_name": po.get("engine_name", settings.OCR_PROVIDER),
-                        "raw_text": po.get("raw_text"),
-                        "tokens_json": po.get("tokens_json"),
-                        "average_confidence": po.get("average_confidence"),
-                        "processing_time_ms": po.get("processing_time_ms"),
-                    },
-                )
-
-            for d in all_dets:
-                await result_repo.save_detection(job_id, pk, d)
-
-            for i, pb in enumerate(page_bcs):
-                await result_repo.save_barcode(
-                    job_id,
-                    pk,
-                    {
-                        "page_number": i + 1,
-                        "barcode_found": pb.get("barcode_found", False),
-                        "barcode_decoded": pb.get("barcode_decoded", False),
-                        "barcode_value": pb.get("barcode_value"),
-                        "barcode_type": pb.get("barcode_type"),
-                        "barcode_confidence": pb.get("barcode_confidence"),
-                        "bounding_box": pb.get("bounding_box"),
-                        "decoder_name": pb.get("decoder_name"),
-                    },
-                )
-
-            pages = []
-            for i in range(len(page_images)):
-                page_dets = [d for d in all_dets if d.get("page_number", 1) == i + 1]
-                pages.append(
-                    {
-                        "page_number": i + 1,
-                        "page_index": i,
-                        "ocr": {
-                            "engine": page_images[i].get("engine_name", "?"),
-                            "raw_text": page_images[i].get("raw_text"),
-                            "average_confidence": page_images[i].get("average_confidence"),
-                        },
-                        "detections": page_dets,
-                        "barcode": page_bcs[i] if i < len(page_bcs) else {},
-                    }
-                )
-
-            await result_repo.save_final(
-                FinalResult(
-                    job_id=job_id,
-                    queue_id=queue_id,
-                    overall_result=overall,
-                    processing_status=statuses.COMPLETED,
-                    ai_confidence=total_conf,
-                    ai_confidence_level=ConfidenceScore.level(total_conf),
-                    ai_note=remark,
-                    ai_return_status=overall,
-                    ai_return_cd=return_codes.SUCCESS,
-                    ai_return_remark=remark,
-                    ai_return_confidence=round(total_conf) if total_conf else None,
-                    internal_result_json={"pages": pages},
-                    processing_time_ms=result.get("processing_time_ms", 0),
-                    published_at=datetime.utcnow(),
-                )
-            )
-
-            await session.commit()
-            logger.info("db_save_ok", queue_id=queue_id)
 
     async def close(self) -> None:
         return None

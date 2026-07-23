@@ -1,0 +1,166 @@
+import asyncio
+import threading
+import time
+from typing import Any
+
+import pytest
+
+from app.application.services.local_execution_service import LocalExecutionService
+from app.application.services.local_runtime import LocalDocument
+from app.shared.config.settings import settings
+
+
+def document(name: str) -> LocalDocument:
+    return LocalDocument(name, "image/png", name.encode(), "INV")
+
+
+def successful_raw_result(name: str) -> dict[str, Any]:
+    return {
+        "document_id": f"document-{name}",
+        "status": "OK",
+        "doc_type": "INV",
+        "pages": [],
+        "validation": {"passed": True},
+        "confidence": {"overall_result": "OK"},
+        "processing_time_ms": 1,
+    }
+
+
+class RecordingProcessor:
+    def __init__(self, failing_name: str | None = None) -> None:
+        self.failing_name = failing_name
+        self.calls: list[str] = []
+        self.active = 0
+        self.max_active = 0
+        self.database_saves = 0
+
+    async def process(self, file_bytes: bytes, filename: str, doc_type: str) -> dict[str, Any]:
+        self.calls.append(filename)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0)
+            if filename == self.failing_name:
+                raise RuntimeError(f"cannot process {filename}")
+            return successful_raw_result(filename)
+        finally:
+            self.active -= 1
+
+    async def _save_to_db(self, *_args: Any) -> None:
+        self.database_saves += 1
+
+
+def test_run_inline_bounds_parallel_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MAX_PARALLEL_DOCUMENTS", 2)
+    processor = RecordingProcessor()
+    service = LocalExecutionService(processor=processor)
+
+    snapshot = asyncio.run(
+        service.run_inline([document("a.png"), document("b.png"), document("c.png")])
+    )
+
+    assert processor.max_active == 2
+    assert sorted(processor.calls) == ["a.png", "b.png", "c.png"]
+    assert snapshot.result is not None
+    assert snapshot.result["header"]["correlation_id"] == snapshot.job_id
+    assert snapshot.result["processing"]["job_id"] == snapshot.job_id
+    assert processor.database_saves == 0
+
+
+def test_run_inline_keeps_successful_documents_when_one_fails() -> None:
+    processor = RecordingProcessor(failing_name="b.png")
+    service = LocalExecutionService(processor=processor)
+
+    snapshot = asyncio.run(
+        service.run_inline([document("a.png"), document("b.png"), document("c.png")])
+    )
+
+    assert snapshot.status == "PARTIAL_SUCCESS"
+    assert snapshot.completed_documents == 3
+    assert snapshot.result is not None
+    assert [item["document_name"] for item in snapshot.result["documents"]] == [
+        "a.png",
+        "b.png",
+        "c.png",
+    ]
+    assert snapshot.result["documents"][1]["processing_status"] == "FAILED"
+    assert snapshot.result["documents"][1]["document_result"] == "NG"
+    assert snapshot.result["errors"] == [
+        {
+            "document_name": "b.png",
+            "stage": "PROCESSING",
+            "message": "cannot process b.png",
+        }
+    ]
+    assert snapshot.result["header"]["processing_result"] == "PARTIAL_SUCCESS"
+
+
+class BlockingProcessor:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    async def process(self, file_bytes: bytes, filename: str, doc_type: str) -> dict[str, Any]:
+        self.started.set()
+        while not self.release.is_set():
+            await asyncio.sleep(0.005)
+        return successful_raw_result(filename)
+
+
+def test_submit_returns_while_processing_continues_in_background() -> None:
+    processor = BlockingProcessor()
+    service = LocalExecutionService(processor=processor)
+
+    job_id = service.submit([document("a.png")])
+
+    assert processor.started.wait(timeout=1)
+    assert service.snapshot(job_id).status == "RUNNING"
+    processor.release.set()
+
+    deadline = time.monotonic() + 1
+    while service.snapshot(job_id).status == "RUNNING" and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert service.snapshot(job_id).status == "SUCCEEDED"
+
+
+class JobRecordingProcessor:
+    def __init__(self) -> None:
+        self.first_started = threading.Event()
+        self.second_started = threading.Event()
+        self.release_first = threading.Event()
+
+    async def process(self, file_bytes: bytes, filename: str, doc_type: str) -> dict[str, Any]:
+        if filename == "first.png":
+            self.first_started.set()
+            while not self.release_first.is_set():
+                await asyncio.sleep(0.005)
+        else:
+            self.second_started.set()
+        return successful_raw_result(filename)
+
+
+def test_submit_bounds_active_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "LOCAL_MAX_ACTIVE_JOBS", 1)
+    processor = JobRecordingProcessor()
+    service = LocalExecutionService(processor=processor)
+
+    first_job = service.submit([document("first.png")])
+    assert processor.first_started.wait(timeout=1)
+    second_job = service.submit([document("second.png")])
+
+    assert not processor.second_started.wait(timeout=0.05)
+    processor.release_first.set()
+    assert processor.second_started.wait(timeout=1)
+
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        if all(
+            service.snapshot(job_id).status == "SUCCEEDED"
+            for job_id in (first_job, second_job)
+        ):
+            break
+        time.sleep(0.005)
+    assert service.snapshot(first_job).status == "SUCCEEDED"
+    assert service.snapshot(second_job).status == "SUCCEEDED"

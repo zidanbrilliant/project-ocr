@@ -46,6 +46,10 @@ def _png_bytes() -> bytes:
     return b"fake-rendered-page"
 
 
+def test_direct_processor_has_no_local_database_persistence() -> None:
+    assert not hasattr(dp.DirectProcessor, "_save_to_db")
+
+
 def test_pdf_text_falls_back_when_page_ocr_is_blank(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dp, "setup_logging", lambda: None)
     processor = dp.DirectProcessor()
