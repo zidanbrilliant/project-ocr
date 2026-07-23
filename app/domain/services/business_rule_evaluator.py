@@ -32,6 +32,7 @@ class RuleConfig:
 class BusinessRuleEvaluator:
     def __init__(self, config: RuleConfig | None = None) -> None:
         self._config = config or RuleConfig(
+            require_invoice_number=settings.REQUIRE_INVOICE_NUMBER,
             require_signature=settings.REQUIRE_SIGNATURE_FOR_INVOICE,
             require_stamp=settings.REQUIRE_STAMP_FOR_INVOICE,
             require_barcode=settings.REQUIRE_BARCODE_FOR_INVOICE,

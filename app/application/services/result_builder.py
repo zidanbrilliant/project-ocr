@@ -50,8 +50,11 @@ def build_result_envelope(
     confidence_level: str = "",
     confidence_threshold: int = 85,
     ai_note_override: str | None = None,
+    correlation_id: str = "",
+    job_id: str = "",
 ) -> dict[str, Any]:
     """Canonical contract-shaped envelope shared by Streamlit and RabbitMQ output."""
+    documents = _with_page_ai_notes(documents)
     total = len(documents)
     ok = sum(
         1
@@ -64,6 +67,7 @@ def build_result_envelope(
     header = {
         "message_version": "1.0",
         "queue_no": queue_id,
+        "correlation_id": correlation_id,
         "response_schema_version": RESULT_SCHEMA_VERSION,
         "pv_no": pv_no,
         "pv_year": pv_year,
@@ -83,7 +87,7 @@ def build_result_envelope(
     return {
         "schema_version": RESULT_SCHEMA_VERSION,
         "header": header,
-        "processing": {"status": status, "duration_ms": duration_ms},
+        "processing": {"status": status, "duration_ms": duration_ms, "job_id": job_id},
         "documents": documents,
         "summary": {
             "total_documents": total,
@@ -213,6 +217,39 @@ def _confidence(value: Any) -> float | None:
         return None
     value = float(value)
     return round(value / 100 if value > 1 else value, 4)
+
+
+def _page_ai_note(
+    ocr: dict[str, Any], detections: list[dict[str, Any]], barcode: Any, color_evidence: Any
+) -> str:
+    """Summarize page evidence deterministically for local review."""
+    ocr_note = "OCR text found" if ocr.get("raw_text") else "OCR text not found"
+    detection_note = f"{len(detections)} detection(s)"
+    barcode_note = "barcode found" if barcode else "barcode not found"
+    color_note = "color evidence found" if color_evidence else "color evidence not found"
+    return f"{ocr_note}; {detection_note}; {barcode_note}; {color_note}."
+
+
+def _with_page_ai_notes(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add page evidence summaries without changing caller-owned document structures."""
+    enriched_documents = []
+    for document in documents:
+        enriched_document = document.copy()
+        color_evidence = document.get("document_color", {})
+        enriched_document["pages"] = [
+            {
+                **page,
+                "ai_note": _page_ai_note(
+                    page.get("ocr", {}),
+                    page.get("detections", []),
+                    page.get("barcodes", []),
+                    page.get("document_color", color_evidence),
+                ),
+            }
+            for page in document.get("pages", [])
+        ]
+        enriched_documents.append(enriched_document)
+    return enriched_documents
 
 
 def _text_blocks(tokens: list[dict[str, Any]], width: int | None, height: int | None) -> list[dict[str, Any]]:

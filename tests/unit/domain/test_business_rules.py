@@ -4,6 +4,7 @@ from app.domain.entities.business_validation_result import BusinessValidationRes
 from app.domain.entities.detection_result import DetectionResult
 from app.domain.entities.ocr_result import OCRResult
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator, RuleConfig
+from app.shared.config.settings import settings
 
 
 @pytest.fixture
@@ -71,6 +72,14 @@ def test_invoice_requires_decoded_barcode_and_colored_document() -> None:
     evaluator = BusinessRuleEvaluator(RuleConfig(require_invoice_number=False, require_amount=False, require_stamp=False, require_barcode=True))
     result = evaluator.validate_invoice(OCRResult(), [], None, None, barcode_result={"barcode_found": True, "barcode_decoded": False}, is_colored=False)
     assert {rule.rule_id for rule in result.failed_rules} == {"INV-R007", "DOC-R001"}
+
+
+def test_default_invoice_policy_allows_missing_invoice_number_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "REQUIRE_INVOICE_NUMBER", False, raising=False)
+
+    result = BusinessRuleEvaluator().validate_invoice(OCRResult(invoice_number=None), [], 1_000, 90)
+
+    assert "INV-R001" not in {item.rule_id for item in result.failed_rules}
 
 
 def test_invoice_missing_materai_above_threshold(evaluator: BusinessRuleEvaluator) -> None:

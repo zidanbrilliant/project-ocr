@@ -1,4 +1,4 @@
-from app.application.services.result_builder import build_result_payload
+from app.application.services.result_builder import build_result_envelope, build_result_payload
 
 
 class _PageImage:
@@ -40,3 +40,31 @@ def test_result_payload_preserves_field_candidate_audit() -> None:
     payload = build_result_payload(raw, "invoice.png", "image/png", 10, 20)
 
     assert payload["documents"][0]["field_candidate_audit"]["document_number"][0]["selection_status"] == "SELECTED"
+
+
+def test_result_envelope_includes_local_identifiers_and_deterministic_page_note() -> None:
+    result = build_result_envelope(
+        [
+            {
+                "document_id": "DOC-42",
+                "document_name": "invoice.png",
+                "document_result": "OK",
+                "pages": [
+                    {
+                        "page_number": 1,
+                        "ocr": {"raw_text": "INV-1"},
+                        "detections": [{"label": "stamp"}],
+                        "barcodes": [{"text": "INV-1"}],
+                        "document_color": {"is_colored": True},
+                    }
+                ],
+            }
+        ],
+        20,
+        correlation_id="correlation-001",
+        job_id="job-001",
+    )
+
+    assert result["header"]["correlation_id"] == "correlation-001"
+    assert result["processing"]["job_id"] == "job-001"
+    assert result["documents"][0]["pages"][0]["ai_note"] == "OCR text found; 1 detection(s); barcode found; color evidence found."

@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     OCR_ENABLE_PDF_TEXT_EXTRACTION: bool = True
 
     CONFIDENCE_THRESHOLD: int = 85
+    REQUIRE_INVOICE_NUMBER: bool = False
     AMOUNT_MATCH_TOLERANCE: float = 0.0
     AMOUNT_STAMP_DUTY_THRESHOLD: int = 5_000_000
     REQUIRE_SIGNATURE_FOR_INVOICE: bool = False
@@ -66,6 +67,10 @@ class Settings(BaseSettings):
     DELIVERY_NOTE_REQUIRED_STAMP_COUNT: int = 2
 
     ENABLE_BARCODE_FALLBACK: bool = True
+
+    LOCAL_MAX_ACTIVE_JOBS: int = 1
+    FIELD_EXACT_MATCH_THRESHOLD: float = 0.85
+    YOLO_AP50_THRESHOLD: float = 0.90
 
     MAX_RETRY: int = 5
     RETRY_BACKOFF_SECONDS: int = 30
