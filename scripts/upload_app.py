@@ -1,8 +1,5 @@
-import asyncio
-import hashlib
 import json
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -11,43 +8,34 @@ import cv2
 import numpy as np
 import streamlit as st
 
-from app.application.services.result_builder import build_result_envelope
+from app.application.services.local_execution_service import LocalExecutionService
+from app.application.services.local_runtime import LocalDocument
 from app.shared.config.settings import settings
 from scripts.direct_processor import DirectProcessor
-from scripts.result_adapter import normalize_pipeline_result_for_ui
+from scripts.result_adapter import normalize_result_envelope_for_ui
 
 st.set_page_config(page_title="Vision AI", page_icon="VI", layout="wide")
 
 DOC_TYPES = {"INV": "Invoice", "DN": "Delivery Note"}
 
-DEFAULT_STATE = {
-    "raw_result": None,
-    "ui_result": None,
-    "ui_results": [],
-    "batch_result": None,
-    "processing_error": None,
-    "processing_done": False,
-    "processing_time_ms": None,
-    "uploaded_file_hash": None,
-    "selected_page_index": 0,
-}
-
 
 def init_state() -> None:
-    for key, value in DEFAULT_STATE.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    if "local_job_id" not in st.session_state:
+        st.session_state.local_job_id = None
 
 
 def clear_processing_state() -> None:
-    for key in DEFAULT_STATE:
-        st.session_state.pop(key, None)
-    init_state()
+    st.session_state.pop("local_job_id", None)
 
 
 @st.cache_resource(show_spinner=False)
 def get_processor() -> DirectProcessor:
     return DirectProcessor()
+
+
+@st.cache_resource(show_spinner=False)
+def get_local_service() -> LocalExecutionService:
+    return LocalExecutionService(processor=get_processor())
 
 
 def draw_bboxes(img: np.ndarray, detections: list[dict], color=(0, 160, 90)) -> np.ndarray:
@@ -63,7 +51,7 @@ def draw_bboxes(img: np.ndarray, detections: list[dict], color=(0, 160, 90)) -> 
     return vis
 
 
-async def main_ui() -> None:
+def main_ui() -> None:
     init_state()
     st.title("Vision AI Document Inspector")
 
@@ -94,16 +82,47 @@ async def main_ui() -> None:
         doc_type = st.selectbox("Document Type", options=list(DOC_TYPES.keys()), format_func=lambda x: DOC_TYPES[x])
 
         if st.button("Process", type="primary", disabled=not uploaded, use_container_width=True):
-            await _process_uploaded_files(uploaded, doc_type)
+            documents = [
+                LocalDocument(item.name, item.type or "", item.getvalue(), doc_type)
+                for item in uploaded
+            ]
+            st.session_state.local_job_id = get_local_service().submit(documents)
+            st.rerun()
+            return
 
-    ui_results = st.session_state.get("ui_results") or []
     with col_right:
-        if st.session_state.get("processing_error"):
-            st.error(st.session_state.processing_error)
-
-        if not ui_results:
+        job_id = st.session_state.get("local_job_id")
+        if not job_id:
             st.info("Upload a document and click Process.")
             return
+
+        try:
+            snapshot = get_local_service().snapshot(job_id)
+        except LookupError as error:
+            st.error(str(error))
+            return
+
+        if snapshot.status in {"PENDING", "QUEUED", "RUNNING"}:
+            st.info(
+                f"Processing {snapshot.completed_documents}/{snapshot.total_documents} document(s)."
+            )
+            if st.button("Refresh progress"):
+                st.rerun()
+            return
+
+        if snapshot.status == "FAILED":
+            st.error(snapshot.error or "Local processing failed.")
+            return
+
+        if snapshot.result is None:
+            st.error(f"Job {job_id} finished without a result.")
+            return
+
+        ui_results = normalize_result_envelope_for_ui(snapshot.result)
+        if not ui_results:
+            st.error("The completed result contains no documents.")
+            return
+
         selected_document = st.selectbox(
             "Document",
             options=list(range(len(ui_results))),
@@ -113,7 +132,7 @@ async def main_ui() -> None:
         _display_results(ui_result)
         if len(ui_results) > 1:
             with st.expander("Combined RabbitMQ preview"):
-                st.json(st.session_state.batch_result)
+                st.json(snapshot.result)
 
 
 def _render_model_status(processor: DirectProcessor) -> None:
@@ -137,80 +156,28 @@ def _render_model_status(processor: DirectProcessor) -> None:
         st.warning("YOLO: not loaded")
 
 
-async def _process_uploaded_files(uploaded_files, doc_type: str) -> None:
-    with st.spinner(f"Processing {len(uploaded_files)} document(s)..."):
-        try:
-            processor = get_processor()
-            await processor.warmup()
-            started = time.perf_counter()
-            semaphore = asyncio.Semaphore(max(1, min(settings.MAX_PARALLEL_DOCUMENTS, len(uploaded_files))))
-
-            async def process_one(index, uploaded):
-                uploaded_bytes = uploaded.getvalue()
-                if not uploaded_bytes:
-                    raise ValueError(f"Uploaded file is empty: {uploaded.name}")
-                async with semaphore:
-                    document_started = time.perf_counter()
-                    raw_result = await processor.process(uploaded_bytes, uploaded.name, doc_type)
-                    document_elapsed = round((time.perf_counter() - document_started) * 1000)
-                    result = normalize_pipeline_result_for_ui(
-                        raw_result=raw_result,
-                        file_name=uploaded.name,
-                        content_type=uploaded.type or "",
-                        file_size_bytes=len(uploaded_bytes),
-                        processing_time_ms=document_elapsed,
-                    )
-                return index, hashlib.sha256(uploaded_bytes).hexdigest(), result
-
-            processed = await asyncio.gather(
-                *(process_one(index, uploaded) for index, uploaded in enumerate(uploaded_files))
-            )
-            processed.sort(key=lambda item: item[0])
-            hashes = [item[1] for item in processed]
-            ui_results = [item[2] for item in processed]
-            elapsed = round((time.perf_counter() - started) * 1000)
-            documents = [result["rabbitmq_preview"]["documents"][0] for result in ui_results]
-            batch_result = build_result_envelope(
-                documents,
-                elapsed,
-                errors=[error for result in ui_results for error in result.get("errors", [])],
-            )
-            file_hash = hashlib.sha256("".join(hashes).encode()).hexdigest()
-            st.session_state.raw_result = None
-            st.session_state.ui_result = ui_results[0]
-            st.session_state.ui_results = ui_results
-            st.session_state.batch_result = batch_result
-            st.session_state.processing_time_ms = elapsed
-            st.session_state.processing_done = True
-            st.session_state.processing_error = None
-            st.session_state.uploaded_file_hash = file_hash
-            st.session_state.selected_page_index = 0
-            _save_test_result(file_hash, batch_result)
-        except Exception as exc:
-            st.session_state.processing_error = str(exc)
-            st.session_state.processing_done = False
-        st.rerun()
-
-
 def _display_results(ui_result: dict) -> None:
     errors = ui_result.get("errors") or []
     if errors:
-        st.error("\n".join(str(err) for err in errors))
+        st.error(
+            "\n".join(
+                error.get("message", str(error)) if isinstance(error, dict) else str(error)
+                for error in errors
+            )
+        )
 
     pages = ui_result.get("pages", [])
     if not pages:
         st.error("No pages in result.")
+        st.json(ui_result["rabbitmq_preview"])
         return
 
     doc = ui_result.get("document", {})
     total_pages = len(pages)
-    selected_index = min(st.session_state.selected_page_index, total_pages - 1)
     selected_index = st.selectbox(
         "Page",
         options=list(range(total_pages)),
-        index=selected_index,
         format_func=lambda i: f"Page {pages[i]['page_number']} of {total_pages}",
-        key="selected_page_index",
     )
     selected_page = pages[selected_index]
 
@@ -245,14 +212,6 @@ def _display_results(ui_result: dict) -> None:
             file_name="vision-ai-result.json",
             mime="application/json",
         )
-
-
-def _save_test_result(file_hash: str, payload: dict) -> None:
-    result_dir = Path(settings.TEST_RESULT_DIR)
-    result_dir.mkdir(parents=True, exist_ok=True)
-    (result_dir / f"{file_hash[:16]}.json").write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
 
 
 def _render_preview(page: dict, pages: list) -> None:
@@ -357,7 +316,7 @@ def _render_fields(page: dict) -> None:
 
 def _render_summary(ui_result: dict) -> None:
     payload = ui_result["rabbitmq_preview"]
-    document = payload["documents"][0]
+    document = payload["documents"][ui_result["document_index"]]
     reasoning = document.get("reasoning") or {}
     if reasoning.get("error"):
         st.error(f"Qwen reasoning unavailable: {reasoning['error']}")
@@ -384,4 +343,4 @@ def _render_confidence(ui_result: dict, page: dict) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main_ui())
+    main_ui()
