@@ -1,5 +1,6 @@
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -26,6 +27,13 @@ def init_state() -> None:
 
 def clear_processing_state() -> None:
     st.session_state.pop("local_job_id", None)
+    st.session_state.pop("local_job_started_at", None)
+
+
+def format_elapsed_time(started_at: float, *, now: float | None = None) -> str:
+    elapsed_seconds = max(0, int((now if now is not None else time.monotonic()) - started_at))
+    minutes, seconds = divmod(elapsed_seconds, 60)
+    return f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
 
 
 @st.cache_resource(show_spinner=False)
@@ -87,6 +95,7 @@ def main_ui() -> None:
                 for item in uploaded
             ]
             st.session_state.local_job_id = get_local_service().submit(documents)
+            st.session_state.local_job_started_at = time.monotonic()
             st.rerun()
             return
 
@@ -103,11 +112,19 @@ def main_ui() -> None:
             return
 
         if snapshot.status in {"PENDING", "QUEUED", "RUNNING"}:
+            started_at = st.session_state.get("local_job_started_at", time.monotonic())
+            elapsed = format_elapsed_time(started_at)
+            completed = snapshot.completed_documents
+            total = snapshot.total_documents
+            progress = completed / total if total else 0.0
             st.info(
-                f"Processing {snapshot.completed_documents}/{snapshot.total_documents} document(s)."
+                f"Processing {completed}/{total} document(s) — {elapsed} elapsed."
             )
-            if st.button("Refresh progress"):
+            st.progress(progress, text="AI inference is running. This page refreshes automatically every 2 seconds.")
+            if st.button("Refresh now"):
                 st.rerun()
+            time.sleep(2)
+            st.rerun()
             return
 
         _render_finished_job(snapshot, job_id)

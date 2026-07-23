@@ -54,6 +54,13 @@ LocalJobSnapshot = import_module(
 upload_app = import_module("scripts.upload_app")
 
 
+def test_format_elapsed_time_uses_minutes_after_sixty_seconds() -> None:
+    started_at = 100.0
+
+    assert upload_app.format_elapsed_time(started_at, now=159.9) == "59s"
+    assert upload_app.format_elapsed_time(started_at, now=160.0) == "1m 00s"
+
+
 def test_failed_job_with_canonical_result_renders_detail_json(monkeypatch) -> None:
     envelope = {
         "documents": [
