@@ -25,8 +25,9 @@ python scripts/benchmark_pipeline.py "dataset groundtruth" --ground-truth "datas
 The command writes `artifacts/benchmark-local.json` before returning the gate
 result. Exit code `0` means all requested 85% field and 90% YOLO gates pass;
 exit code `2` means the report was written but at least one requested gate
-failed. Barcode decoding and color inspection remain output-only with
-no acceptance gate until labeled ground truth exists.
+failed. Barcode decoding and color inspection remain output-only with explicit
+`evaluation_status: not_evaluated` markers until labeled ground truth exists;
+neither is an acceptance gate.
 
 ## DGX Docker Testing
 

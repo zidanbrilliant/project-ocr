@@ -24,6 +24,7 @@ from app.shared.exceptions.base import DocumentError
 from app.shared.logging.logger import get_logger, setup_logging
 
 logger = get_logger(__name__)
+OUTPUT_ONLY_EVALUATION_STATUS = "not_evaluated"
 
 
 def _ocr_error(ocr_result: dict[str, Any]) -> str | None:
@@ -75,7 +76,10 @@ class DirectProcessor:
             "ocr": {},
             "detections": [],
             "detection_aggregated": {},
-            "barcode": {},
+            "barcode": {"evaluation_status": OUTPUT_ONLY_EVALUATION_STATUS},
+            "document_color": {
+                "evaluation_status": OUTPUT_ONLY_EVALUATION_STATUS
+            },
             "fields": {},
             "validation": {},
             "confidence": {},
@@ -128,7 +132,11 @@ class DirectProcessor:
             # ponytail: collect per-page data for DB
             page_ocrs: list[dict] = []
             page_bcs: list[dict] = []
-            bc_raw: dict[str, Any] = {"barcode_found": False, "barcode_decoded": False}
+            bc_raw: dict[str, Any] = {
+                "barcode_found": False,
+                "barcode_decoded": False,
+                "evaluation_status": OUTPUT_ONLY_EVALUATION_STATUS,
+            }
 
             all_texts = [""] * n_pages
             all_tokens: list[dict[str, Any]] = []
@@ -168,6 +176,10 @@ class DirectProcessor:
                 ocr_task = read_page_ocr()
                 bc_task = self._barcode_chain.read(pp_img or p_img)
                 page_ocr, page_bc = await asyncio.gather(ocr_task, bc_task)
+                page_bc = {
+                    **page_bc,
+                    "evaluation_status": OUTPUT_ONLY_EVALUATION_STATUS,
+                }
                 if not (page_ocr.get("raw_text") or "").strip() and pp_img and pp_img != p_img:
                     fallback_ocr = await self._ocr.run(pp_img, extension=ocr_ext)
                     if (fallback_ocr.get("raw_text") or "").strip():
@@ -254,6 +266,10 @@ class DirectProcessor:
                         if detection.get("page_number") == index + 1 and detection.get("object_type") == "barcode"
                     ],
                 )
+                retry = {
+                    **retry,
+                    "evaluation_status": OUTPUT_ONLY_EVALUATION_STATUS,
+                }
                 if retry.get("barcode_decoded"):
                     page_bcs[index] = retry
                     bc_raw = retry
@@ -393,7 +409,11 @@ class DirectProcessor:
                 result["error"] = ocr_errors[0]
             result["quality_scores"] = quality
             result["quality_pages"] = quality_scores
-            result["document_color"] = {"is_colored": document_colored, "pages": quality_scores}
+            result["document_color"] = {
+                "is_colored": document_colored,
+                "pages": quality_scores,
+                "evaluation_status": OUTPUT_ONLY_EVALUATION_STATUS,
+            }
 
             elapsed_ms = int((time.monotonic() - start) * 1000)
             result["processing_time_ms"] = elapsed_ms

@@ -195,6 +195,7 @@ def build_result_payload(
         "fields": _field_entries(fields, None),
         "field_candidate_audit": raw_result.get("field_candidate_audit", {}),
         "financials": raw_result.get("financials", {}),
+        "barcode": raw_result.get("barcode", {}),
         "document_color": raw_result.get("document_color", {}),
         "detections": [_detection_entry(d, d.get("page_number", 1) - 1, None, None) for d in detections],
         "validation": raw_result.get("validation", {}),

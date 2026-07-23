@@ -44,6 +44,12 @@ class MixedProcessor:
                     "evaluation_status": "not_evaluated",
                 }
             ],
+            "barcode": {
+                "barcode_found": True,
+                "barcode_decoded": True,
+                "value": "INV-001",
+                "evaluation_status": "not_evaluated",
+            },
             "fields": {
                 "document_number": {
                     "value": "INV-001",
@@ -145,6 +151,7 @@ def test_local_e2e_keeps_good_document_when_one_fails() -> None:
         "OCR text found; 0 detection(s); barcode found; color evidence found."
     )
     assert good_page["barcodes"][0]["evaluation_status"] == "not_evaluated"
+    assert good_document["barcode"]["evaluation_status"] == "not_evaluated"
     assert good_document["document_color"]["evaluation_status"] == "not_evaluated"
     assert good_document["validation"] == {"passed": True, "failed_rules": []}
     assert good_document["confidence"] == {

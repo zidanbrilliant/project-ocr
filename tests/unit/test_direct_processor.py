@@ -39,6 +39,7 @@ if "fitz" not in sys.modules:
 if "asyncpg" not in sys.modules:
     sys.modules["asyncpg"] = types.SimpleNamespace()
 
+from app.application.services.result_builder import build_result_payload
 from scripts import direct_processor as dp
 
 
@@ -100,3 +101,17 @@ def test_pdf_text_falls_back_when_page_ocr_is_blank(monkeypatch: pytest.MonkeyPa
 
     assert result["ocr"]["raw_text"] == "PDF TEXT"
     assert result["ocr"].get("error") is None
+    assert result["barcode"]["evaluation_status"] == "not_evaluated"
+    assert result["document_color"]["evaluation_status"] == "not_evaluated"
+
+    document = build_result_payload(
+        result,
+        "test.pdf",
+        "application/pdf",
+        10,
+        result["processing_time_ms"],
+    )["documents"][0]
+
+    assert document["barcode"]["evaluation_status"] == "not_evaluated"
+    assert document["pages"][0]["barcodes"][0]["evaluation_status"] == "not_evaluated"
+    assert document["document_color"]["evaluation_status"] == "not_evaluated"
