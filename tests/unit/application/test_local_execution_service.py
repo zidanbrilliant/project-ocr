@@ -215,3 +215,82 @@ def test_submit_bounds_active_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
         time.sleep(0.005)
     assert service.snapshot(first_job).status == "SUCCEEDED"
     assert service.snapshot(second_job).status == "SUCCEEDED"
+
+
+class WarmupRecordingProcessor:
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.warmup_started = threading.Event()
+        self.release_warmup = threading.Event()
+
+    async def warmup(self) -> None:
+        self.events.append("warmup:start")
+        self.warmup_started.set()
+        while not self.release_warmup.is_set():
+            await asyncio.sleep(0.005)
+        self.events.append("warmup:end")
+
+    async def process(self, file_bytes: bytes, filename: str, doc_type: str) -> dict[str, Any]:
+        self.events.append(f"process:{filename}")
+        return successful_raw_result(filename)
+
+
+def test_submit_warms_processor_once_before_concurrent_and_subsequent_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "LOCAL_MAX_ACTIVE_JOBS", 2)
+    processor = WarmupRecordingProcessor()
+    service = LocalExecutionService(processor=processor)
+
+    first_job = service.submit([document("first.png")])
+    assert processor.warmup_started.wait(timeout=1)
+    second_job = service.submit([document("second.png")])
+
+    assert processor.events == ["warmup:start"]
+    processor.release_warmup.set()
+
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        if all(
+            service.snapshot(job_id).status == "SUCCEEDED"
+            for job_id in (first_job, second_job)
+        ):
+            break
+        time.sleep(0.005)
+
+    third_job = service.submit([document("third.png")])
+    deadline = time.monotonic() + 1
+    while service.snapshot(third_job).status != "SUCCEEDED" and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert service.snapshot(first_job).status == "SUCCEEDED"
+    assert service.snapshot(second_job).status == "SUCCEEDED"
+    assert service.snapshot(third_job).status == "SUCCEEDED"
+    assert processor.events.count("warmup:start") == 1
+    assert processor.events.count("warmup:end") == 1
+    assert processor.events.index("warmup:end") < processor.events.index("process:first.png")
+    assert processor.events.index("warmup:end") < processor.events.index("process:second.png")
+    assert processor.events.index("warmup:end") < processor.events.index("process:third.png")
+
+
+class FailingWarmupProcessor:
+    def __init__(self) -> None:
+        self.process_calls: list[str] = []
+
+    async def warmup(self) -> None:
+        raise RuntimeError("model warmup failed")
+
+    async def process(self, file_bytes: bytes, filename: str, doc_type: str) -> dict[str, Any]:
+        self.process_calls.append(filename)
+        return successful_raw_result(filename)
+
+
+def test_warmup_failure_fails_job_without_processing() -> None:
+    processor = FailingWarmupProcessor()
+    service = LocalExecutionService(processor=processor)
+
+    snapshot = asyncio.run(service.run_inline([document("a.png")]))
+
+    assert snapshot.status == "FAILED"
+    assert snapshot.error == "model warmup failed"
+    assert processor.process_calls == []

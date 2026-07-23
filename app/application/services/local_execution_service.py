@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from threading import Lock
 from typing import Any
 
 from app.application.services.local_runtime import (
@@ -38,6 +39,8 @@ class LocalExecutionService:
         self._store = store or InMemoryLocalJobStore()
         self._consumer = LocalConsumer(self._store)
         self._publisher = LocalPublisher(self._store)
+        self._warmup_lock = Lock()
+        self._warmup_future: Future[None] | None = None
         self._executor = ThreadPoolExecutor(
             max_workers=settings.LOCAL_MAX_ACTIVE_JOBS,
             thread_name_prefix="local-document-job",
@@ -93,6 +96,7 @@ class LocalExecutionService:
             return result_document
 
         try:
+            await self._warmup_processor_once()
             settled = await asyncio.gather(
                 *(process_one(document) for document in documents),
                 return_exceptions=True,
@@ -115,6 +119,27 @@ class LocalExecutionService:
             self._store.fail(job_id, str(error))
         return self._store.snapshot(job_id)
 
+    async def _warmup_processor_once(self) -> None:
+        with self._warmup_lock:
+            future = self._warmup_future
+            is_owner = future is None
+            if future is None:
+                future = self._warmup_future = Future()
+
+        if not is_owner:
+            await asyncio.wrap_future(future)
+            return
+
+        try:
+            warmup = getattr(self._processor, "warmup", None)
+            if warmup is not None:
+                await warmup()
+        except BaseException as error:
+            future.set_exception(error)
+            raise
+        else:
+            future.set_result(None)
+
     @staticmethod
     def _documents_from_settled(
         settled: list[Any],
@@ -122,7 +147,7 @@ class LocalExecutionService:
     ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
         result_documents: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
-        for index, (result, document) in enumerate(zip(settled, documents)):
+        for index, (result, document) in enumerate(zip(settled, documents, strict=True)):
             if not isinstance(result, BaseException):
                 result_documents.append(result)
                 continue
