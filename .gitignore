@@ -25,3 +25,8 @@ artifacts/results/*
 .agents/
 .worktrees/
 dataset groundtruth/
+dataset yolo/
+benchmark_report_*.json
+artifacts/benchmark-*.json
+.ruff_cache/
+.superpowers/
