@@ -174,3 +174,29 @@ def test_field_gate_fails_fields_without_evaluated_examples() -> None:
 
     assert report["passed"] is False
     assert report["failed_fields"] == ["document_number"]
+
+
+def test_field_gate_uses_raw_counts_instead_of_rounded_display_rate() -> None:
+    report = field_gate(
+        {
+            "document_number": {
+                "evaluated": 100_000,
+                "exact_matches": 84_999,
+                "exact_match_rate": 0.85,
+            },
+            "transaction_amount": {
+                "evaluated": 100_000,
+                "exact_matches": 85_000,
+                "exact_match_rate": 0.85,
+            },
+            "transaction_date": {
+                "evaluated": 100_000,
+                "exact_matches": 100_000,
+                "exact_match_rate": 1.0,
+            },
+        },
+        0.85,
+    )
+
+    assert report["passed"] is False
+    assert report["failed_fields"] == ["document_number"]

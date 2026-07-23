@@ -76,13 +76,17 @@ def field_gate(
     threshold: float,
 ) -> dict[str, Any]:
     """Require every core field to have examples and meet the threshold."""
-    failed = [
-        field
-        for field in CORE_FIELDS
-        if metrics.get(field, {}).get("evaluated", 0) == 0
-        or metrics.get(field, {}).get("exact_match_rate") is None
-        or metrics[field]["exact_match_rate"] < threshold
-    ]
+    failed = []
+    for field in CORE_FIELDS:
+        metric = metrics.get(field, {})
+        evaluated = metric.get("evaluated", 0)
+        rate = (
+            metric["exact_matches"] / evaluated
+            if evaluated and "exact_matches" in metric
+            else metric.get("exact_match_rate")
+        )
+        if not evaluated or rate is None or rate < threshold:
+            failed.append(field)
     return {
         "passed": not failed,
         "failed_fields": failed,
