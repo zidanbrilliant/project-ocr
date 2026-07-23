@@ -101,6 +101,12 @@ def build_result_envelope(
     }
 
 
+def apply_result_envelope(payload: dict[str, Any], envelope: dict[str, Any]) -> None:
+    """Merge the canonical envelope while retaining request-specific payload fields."""
+    payload.update({key: value for key, value in envelope.items() if key != "documents"})
+    payload["documents"] = envelope["documents"]
+
+
 def build_result_payload(
     raw_result: dict[str, Any],
     file_name: str,

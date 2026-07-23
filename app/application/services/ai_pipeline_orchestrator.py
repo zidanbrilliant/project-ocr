@@ -9,7 +9,7 @@ from aio_pika.abc import AbstractIncomingMessage
 from app.application.services.confidence_scoring_service import ConfidenceScoringService
 from app.application.services.field_extraction_service import FieldExtractionService
 from app.application.services.field_reasoning_service import FieldReasoningService
-from app.application.services.result_builder import RESULT_SCHEMA_VERSION, build_result_envelope
+from app.application.services.result_builder import RESULT_SCHEMA_VERSION, apply_result_envelope, build_result_envelope
 from app.domain.entities.ai_job import AIJob as AIJobEntity
 from app.domain.entities.final_result import FinalResult
 from app.domain.entities.normalized_request import (
@@ -205,14 +205,22 @@ class AIPipelineOrchestrator:
             "AI_SCAN_APP": req.source_system,
             "documents": [],
         }
+        documents_by_index = {document.document_index: document for document in req.documents}
         for dr in doc_results:
+            request_document = documents_by_index.get(dr.document_index)
             doc_entry = {
+                "document_id": dr.external_document_id or f"DOC-{dr.document_index + 1:03d}",
+                "document_name": (
+                    request_document.file_name
+                    if request_document and request_document.file_name
+                    else dr.external_document_id or f"document-{dr.document_index + 1}"
+                ),
                 "document_index": dr.document_index,
                 "external_document_id": dr.external_document_id,
                 "document_type": dr.document_type,
                 "processing_status": dr.processing_status,
                 "processing_result": dr.processing_result,
-                "document_result": dr.document_result,
+                "document_result": dr.document_result if dr.document_result in {statuses.OK, statuses.NG} else statuses.NG,
                 "confidence": {
                     "total": dr.confidence,
                     "level": ConfidenceScore.level(dr.confidence),
@@ -285,8 +293,10 @@ class AIPipelineOrchestrator:
             confidence_level=ConfidenceScore.level(folder_confidence),
             confidence_threshold=settings.CONFIDENCE_THRESHOLD,
             ai_note_override=f"{ok_count} OK, {ng_count} NG document(s); folder confidence uses the lowest document score.",
+            correlation_id=req.correlation_id,
+            job_id=str(job_id),
         )
-        result_payload.update({key: value for key, value in envelope.items() if key != "documents"})
+        apply_result_envelope(result_payload, envelope)
 
         # Save final result
         final_result = FinalResult(

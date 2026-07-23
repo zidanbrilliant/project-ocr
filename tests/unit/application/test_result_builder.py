@@ -1,4 +1,4 @@
-from app.application.services.result_builder import build_result_envelope, build_result_payload
+from app.application.services.result_builder import apply_result_envelope, build_result_envelope, build_result_payload
 
 
 class _PageImage:
@@ -68,3 +68,30 @@ def test_result_envelope_includes_local_identifiers_and_deterministic_page_note(
     assert result["header"]["correlation_id"] == "correlation-001"
     assert result["processing"]["job_id"] == "job-001"
     assert result["documents"][0]["pages"][0]["ai_note"] == "OCR text found; 1 detection(s); barcode found; color evidence found."
+
+
+def test_apply_result_envelope_preserves_builder_page_ai_notes() -> None:
+    documents = [
+        {
+            "document_id": "DOC-42",
+            "document_name": "invoice.png",
+            "document_result": "OK",
+            "pages": [
+                {
+                    "page_number": 1,
+                    "ocr": {"raw_text": "INV-1"},
+                    "detections": [{"label": "stamp"}],
+                    "barcodes": [{"text": "INV-1"}],
+                    "document_color": {"is_colored": True},
+                }
+            ],
+        }
+    ]
+    payload = {"documents": documents, "request": {"correlation_id": "correlation-001"}}
+    envelope = build_result_envelope(documents, 20, correlation_id="correlation-001", job_id="job-001")
+
+    apply_result_envelope(payload, envelope)
+
+    assert payload["documents"][0]["pages"][0]["ai_note"] == (
+        "OCR text found; 1 detection(s); barcode found; color evidence found."
+    )
