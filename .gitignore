@@ -23,4 +23,5 @@ artifacts/results/*
 .codex/
 .commandcode/
 .agents/
+.worktrees/
 dataset groundtruth/
