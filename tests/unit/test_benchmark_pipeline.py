@@ -1,5 +1,10 @@
 import asyncio
+import json
+import sys
+import types
 from pathlib import Path
+
+import pytest
 
 import scripts.benchmark_pipeline as benchmark_pipeline
 from app.application.services.local_runtime import LocalJobSnapshot
@@ -135,3 +140,93 @@ def test_benchmark_includes_raw_ocr_only_when_trace_is_requested(
             "text_blocks": [],
         }
     ]
+
+
+def test_benchmark_evaluates_val_with_the_local_execution_detector(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "invoice.png").write_bytes(b"image")
+    yolo_root = tmp_path / "yolo"
+    (yolo_root / "val").mkdir(parents=True)
+    detector = object()
+
+    class FakeService(FakeLocalExecutionService):
+        def __init__(self) -> None:
+            self._processor = types.SimpleNamespace(_yolo=detector)
+
+    calls: list[tuple[object, Path, set[str]]] = []
+
+    async def fake_evaluate(
+        received_detector: object,
+        dataset_root: Path,
+        required_labels: set[str],
+    ) -> dict:
+        calls.append((received_detector, dataset_root, required_labels))
+        return {"acceptance": {"passed": True}}
+
+    monkeypatch.setattr(benchmark_pipeline, "LocalExecutionService", FakeService)
+    monkeypatch.setattr(
+        benchmark_pipeline,
+        "evaluate_yolo_validation",
+        fake_evaluate,
+    )
+
+    report = asyncio.run(
+        benchmark_pipeline.benchmark(
+            input_dir,
+            "INV",
+            yolo_dataset_root=yolo_root,
+        )
+    )
+
+    assert calls == [
+        (
+            detector,
+            yolo_root / "val",
+            {"barcode", "materai", "signature", "stamp"},
+        )
+    ]
+    assert report["yolo_validation"] == {"acceptance": {"passed": True}}
+
+
+def test_required_yolo_gate_writes_report_before_exit_two(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "report.json"
+    input_dir = tmp_path / "input"
+    yolo_root = tmp_path / "yolo"
+    input_dir.mkdir()
+    yolo_root.mkdir()
+    expected_report = {
+        "accuracy": {"field_acceptance": {"passed": True}},
+        "yolo_validation": {"acceptance": {"passed": False}},
+        "results": [],
+    }
+
+    async def fake_benchmark(*args, **kwargs) -> dict:
+        return expected_report
+
+    monkeypatch.setattr(benchmark_pipeline, "benchmark", fake_benchmark)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_pipeline.py",
+            str(input_dir),
+            "--yolo-dataset-root",
+            str(yolo_root),
+            "--require-yolo-gate",
+            "--output",
+            str(output),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        benchmark_pipeline.main()
+
+    assert error.value.code == 2
+    assert json.loads(output.read_text(encoding="utf-8")) == expected_report

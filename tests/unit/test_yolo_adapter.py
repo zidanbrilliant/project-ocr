@@ -25,6 +25,19 @@ _SMALL_PNG = base64.b64decode(
 )
 
 
+def test_class_map_is_empty_before_warmup_and_returns_a_copy() -> None:
+    adapter = YOLOAdapter()
+
+    assert adapter.class_map == {}
+
+    adapter._loaded = True
+    adapter._class_names = {0: "barcode", 1: "stamp"}
+    class_map = adapter.class_map
+    class_map[0] = "changed"
+
+    assert adapter.class_map == {0: "barcode", 1: "stamp"}
+
+
 def test_detection_keeps_original_page_number_and_normalized_box(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.infrastructure.detection import yolo_adapter
 

@@ -15,11 +15,13 @@ from app.application.services.local_runtime import LocalDocument
 from app.application.services.model_evaluation_service import (
     evaluate_candidate_recall,
     evaluate_fields,
+    evaluate_yolo_validation,
     summarize_field_evaluations,
 )
 from app.shared.config.settings import settings
 
 SUPPORTED = {".pdf", ".png", ".jpg", ".jpeg"}
+REQUIRED_YOLO_LABELS = {"barcode", "materai", "signature", "stamp"}
 
 
 def load_ground_truth(path: Path) -> dict[str, dict]:
@@ -46,6 +48,7 @@ async def benchmark(
     ground_truth: dict[str, dict] | None = None,
     include_trace: bool = False,
     limit: int | None = None,
+    yolo_dataset_root: Path | None = None,
 ) -> dict:
     files = sorted(path for path in input_dir.rglob("*") if path.suffix.lower() in SUPPORTED)
     if limit is not None:
@@ -120,7 +123,7 @@ async def benchmark(
         print(f"[{index}/{len(files)}] {path.name} | {row['duration_ms']} ms", flush=True)
 
     duration = time.perf_counter() - started
-    return {
+    report = {
         "documents": len(files),
         "pages": total_pages,
         "duration_seconds": round(duration, 3),
@@ -133,6 +136,30 @@ async def benchmark(
         ),
         "results": results,
     }
+    if yolo_dataset_root is not None:
+        detector = service._processor._yolo
+        try:
+            report["yolo_validation"] = await evaluate_yolo_validation(
+                detector,
+                yolo_dataset_root / "val",
+                REQUIRED_YOLO_LABELS,
+            )
+        except ValueError as error:
+            report["yolo_validation"] = {
+                "class_map": detector.class_map,
+                "per_class": {},
+                "aggregate_map50": 0.0,
+                "evaluated_images": 0,
+                "skipped_images": 0,
+                "error": str(error),
+                "acceptance": {
+                    "passed": False,
+                    "failed_classes": sorted(REQUIRED_YOLO_LABELS),
+                    "aggregate_passed": False,
+                    "threshold": settings.YOLO_AP50_THRESHOLD,
+                },
+            }
+    return report
 
 
 def _snapshot_error(
@@ -157,14 +184,42 @@ def main() -> None:
     parser.add_argument("--ground-truth", type=Path, help="JSON/JSONL rows with file_name and fields")
     parser.add_argument("--include-trace", action="store_true", help="Include OCR, candidates, fields, and reasoning")
     parser.add_argument("--limit", type=int, help="Process only the first N sorted files")
+    parser.add_argument(
+        "--yolo-dataset-root",
+        type=Path,
+        help="YOLO dataset root containing val/images and val/labels",
+    )
+    parser.add_argument(
+        "--require-yolo-gate",
+        action="store_true",
+        help="Exit 2 after writing the report when a requested acceptance gate fails",
+    )
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
+    if args.require_yolo_gate and args.yolo_dataset_root is None:
+        parser.error("--require-yolo-gate requires --yolo-dataset-root")
     ground_truth = load_ground_truth(args.ground_truth) if args.ground_truth else None
-    report = asyncio.run(benchmark(args.input_dir, args.doc_type, ground_truth, args.include_trace, args.limit))
+    report = asyncio.run(
+        benchmark(
+            args.input_dir,
+            args.doc_type,
+            ground_truth,
+            args.include_trace,
+            args.limit,
+            args.yolo_dataset_root,
+        )
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps({key: value for key, value in report.items() if key != "results"}, indent=2))
+    if args.require_yolo_gate:
+        field_failed = bool(args.ground_truth) and not report["accuracy"][
+            "field_acceptance"
+        ]["passed"]
+        yolo_failed = not report["yolo_validation"]["acceptance"]["passed"]
+        if field_failed or yolo_failed:
+            raise SystemExit(2)
 
 
 if __name__ == "__main__":

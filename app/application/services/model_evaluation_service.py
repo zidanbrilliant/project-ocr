@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 CORE_FIELDS = ("document_number", "transaction_amount", "transaction_date")
+YOLO_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 
 
 def normalize_field_value(name: str, value: Any) -> str | Decimal | None:
@@ -151,6 +154,269 @@ def summarize_field_evaluations(
         ),
         "field_acceptance": field_gate(field_metrics, threshold),
     }
+
+
+async def evaluate_yolo_validation(
+    detector: Any,
+    dataset_root: Path,
+    required_labels: set[str],
+) -> dict[str, Any]:
+    """Evaluate normalized YOLO predictions against one images/labels split."""
+    class_map = {int(key): str(value) for key, value in detector.class_map.items()}
+    _required_class_ids(class_map, required_labels)
+    targets = {
+        label: {}
+        for label in required_labels
+    }
+    predictions = {
+        label: []
+        for label in required_labels
+    }
+    images_dir = dataset_root / "images"
+    labels_dir = dataset_root / "labels"
+    if not images_dir.is_dir() or not labels_dir.is_dir():
+        raise FileNotFoundError(
+            f"YOLO validation split requires images/ and labels/: {dataset_root}"
+        )
+
+    evaluated_images = 0
+    skipped_images = 0
+    for image_path in sorted(
+        path
+        for path in images_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in YOLO_IMAGE_SUFFIXES
+    ):
+        label_path = labels_dir / f"{image_path.stem}.txt"
+        if not label_path.is_file():
+            skipped_images += 1
+            continue
+
+        image_targets = _read_yolo_labels(label_path)
+        evaluated_images += 1
+        for class_id, box in image_targets:
+            label = class_map.get(class_id)
+            if label in required_labels:
+                targets[label].setdefault(image_path.name, []).append(box)
+
+        for detection in await detector.detect(image_path.read_bytes()):
+            label = class_map.get(_detection_class_id(detection))
+            box = detection.get("normalized_bounding_box")
+            if label not in required_labels or not _is_box(box):
+                continue
+            predictions[label].append(
+                (
+                    float(detection.get("confidence", 0.0)),
+                    image_path.name,
+                    [float(value) for value in box],
+                )
+            )
+
+    raw_per_class = {
+        label: _class_metrics(targets[label], predictions[label])
+        for label in sorted(required_labels)
+    }
+    per_class = {
+        label: {
+            **metric,
+            "ap50": round(metric["ap50"], 4),
+        }
+        for label, metric in raw_per_class.items()
+    }
+    raw_map50 = sum(
+        metric["ap50"]
+        for metric in raw_per_class.values()
+    ) / len(raw_per_class)
+    return {
+        "class_map": class_map,
+        "per_class": per_class,
+        "aggregate_map50": round(raw_map50, 4),
+        "evaluated_images": evaluated_images,
+        "skipped_images": skipped_images,
+        "acceptance": yolo_gate(raw_per_class, 0.90),
+    }
+
+
+def iou_xyxy(left: Sequence[float], right: Sequence[float]) -> float:
+    """Return intersection-over-union for two xyxy boxes."""
+    overlap_left = max(left[0], right[0])
+    overlap_top = max(left[1], right[1])
+    overlap_right = min(left[2], right[2])
+    overlap_bottom = min(left[3], right[3])
+    intersection = max(0.0, overlap_right - overlap_left) * max(
+        0.0,
+        overlap_bottom - overlap_top,
+    )
+    union = _box_area(left) + _box_area(right) - intersection
+    return intersection / union if union else 0.0
+
+
+def yolo_gate(
+    metrics: dict[str, dict[str, Any]],
+    threshold: float,
+) -> dict[str, Any]:
+    """Require every class AP and aggregate mAP to meet the threshold."""
+    failed_classes = sorted(
+        label
+        for label, metric in metrics.items()
+        if metric.get("ap50") is None or metric["ap50"] < threshold
+    )
+    aggregate_map50 = (
+        sum(float(metric["ap50"]) for metric in metrics.values()) / len(metrics)
+        if metrics
+        else 0.0
+    )
+    aggregate_passed = bool(metrics) and aggregate_map50 >= threshold
+    return {
+        "passed": not failed_classes and aggregate_passed,
+        "failed_classes": failed_classes,
+        "aggregate_passed": aggregate_passed,
+        "threshold": threshold,
+    }
+
+
+def _required_class_ids(
+    class_map: dict[int, str],
+    required_labels: set[str],
+) -> dict[str, int]:
+    matches = {
+        label: [
+            class_id
+            for class_id, class_name in class_map.items()
+            if class_name == label
+        ]
+        for label in required_labels
+    }
+    invalid = {
+        label: ids
+        for label, ids in matches.items()
+        if len(ids) != 1
+    }
+    if invalid:
+        details = ", ".join(
+            f"{label}={len(ids)}"
+            for label, ids in sorted(invalid.items())
+        )
+        raise ValueError(
+            "required YOLO class mapping must contain each label exactly once: "
+            + details
+        )
+    return {
+        label: ids[0]
+        for label, ids in matches.items()
+    }
+
+
+def _read_yolo_labels(path: Path) -> list[tuple[int, list[float]]]:
+    labels = []
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        if not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) != 5:
+            raise ValueError(f"invalid YOLO label at {path}:{line_number}")
+        try:
+            class_id = int(parts[0])
+            center_x, center_y, width, height = map(float, parts[1:])
+        except ValueError as error:
+            raise ValueError(
+                f"invalid YOLO label at {path}:{line_number}"
+            ) from error
+        labels.append(
+            (
+                class_id,
+                [
+                    center_x - width / 2,
+                    center_y - height / 2,
+                    center_x + width / 2,
+                    center_y + height / 2,
+                ],
+            )
+        )
+    return labels
+
+
+def _class_metrics(
+    targets_by_image: dict[str, list[list[float]]],
+    predictions: list[tuple[float, str, list[float]]],
+) -> dict[str, Any]:
+    target_count = sum(len(boxes) for boxes in targets_by_image.values())
+    matched: set[tuple[str, int]] = set()
+    true_positive_flags = []
+    for _, image_name, prediction_box in sorted(
+        predictions,
+        key=lambda item: item[0],
+        reverse=True,
+    ):
+        candidates = [
+            (iou_xyxy(prediction_box, target_box), index)
+            for index, target_box in enumerate(targets_by_image.get(image_name, []))
+            if (image_name, index) not in matched
+        ]
+        best_iou, best_index = max(candidates, default=(0.0, -1))
+        is_true_positive = best_iou >= 0.50
+        true_positive_flags.append(is_true_positive)
+        if is_true_positive:
+            matched.add((image_name, best_index))
+
+    true_positives = sum(true_positive_flags)
+    precision = true_positives / len(predictions) if predictions else 0.0
+    recall = true_positives / target_count if target_count else 0.0
+    return {
+        "targets": target_count,
+        "predictions": len(predictions),
+        "true_positives": true_positives,
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "ap50": _interpolated_ap(true_positive_flags, target_count),
+    }
+
+
+def _interpolated_ap(
+    true_positive_flags: list[bool],
+    target_count: int,
+) -> float:
+    if not target_count:
+        return 0.0
+    precisions = []
+    recalls = []
+    true_positives = 0
+    for rank, is_true_positive in enumerate(true_positive_flags, start=1):
+        true_positives += is_true_positive
+        precisions.append(true_positives / rank)
+        recalls.append(true_positives / target_count)
+    return sum(
+        max(
+            (
+                precision
+                for precision, recall in zip(precisions, recalls, strict=True)
+                if recall >= threshold / 100
+            ),
+            default=0.0,
+        )
+        for threshold in range(101)
+    ) / 101
+
+
+def _box_area(box: Sequence[float]) -> float:
+    return max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+
+
+def _is_box(value: Any) -> bool:
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes))
+        and len(value) == 4
+    )
+
+
+def _detection_class_id(detection: dict[str, Any]) -> int:
+    try:
+        return int(detection.get("class_id", -1))
+    except (TypeError, ValueError):
+        return -1
 
 
 def _field_map(document: dict[str, Any]) -> dict[str, dict[str, Any]]:

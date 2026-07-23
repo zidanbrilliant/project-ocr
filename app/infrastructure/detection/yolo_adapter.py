@@ -1,5 +1,4 @@
 import asyncio
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -33,6 +32,12 @@ class YOLOAdapter:
     @property
     def device(self) -> str:
         return self._device
+
+    @property
+    def class_map(self) -> dict[int, str]:
+        if not self._loaded:
+            return {}
+        return _class_map(self._class_names)
 
     async def warmup(self) -> None:
         await asyncio.get_event_loop().run_in_executor(self._gpu_executor, self._warmup_sync)

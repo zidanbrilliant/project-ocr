@@ -1,6 +1,11 @@
+import asyncio
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
+import pytest
+
+from app.application.services import model_evaluation_service
 from app.application.services.model_evaluation_service import (
     evaluate_candidate_recall,
     evaluate_fields,
@@ -174,6 +179,220 @@ def test_field_gate_fails_fields_without_evaluated_examples() -> None:
 
     assert report["passed"] is False
     assert report["failed_fields"] == ["document_number"]
+
+
+class FakeDetector:
+    def __init__(
+        self,
+        class_map: dict[int, str],
+        detections: dict[str, list[dict]] | None = None,
+    ) -> None:
+        self.class_map = class_map
+        self._detections = detections or {}
+
+    async def detect(self, image_bytes: bytes) -> list[dict]:
+        return self._detections.get(image_bytes.decode(), [])
+
+
+def _write_yolo_sample(
+    root: Path,
+    name: str,
+    labels: str,
+) -> None:
+    (root / "images").mkdir(parents=True, exist_ok=True)
+    (root / "labels").mkdir(parents=True, exist_ok=True)
+    (root / "images" / f"{name}.png").write_bytes(name.encode())
+    (root / "labels" / f"{name}.txt").write_text(labels, encoding="utf-8")
+
+
+def _detection(
+    box: list[float],
+    confidence: float = 0.9,
+) -> dict:
+    return {
+        "class_id": 0,
+        "confidence": confidence,
+        "normalized_bounding_box": box,
+    }
+
+
+def test_yolo_validation_reports_perfect_detection(tmp_path: Path) -> None:
+    _write_yolo_sample(tmp_path, "perfect", "0 0.5 0.5 0.4 0.4\n")
+    detector = FakeDetector(
+        {0: "barcode"},
+        {"perfect": [_detection([0.3, 0.3, 0.7, 0.7])]},
+    )
+
+    report = asyncio.run(
+        model_evaluation_service.evaluate_yolo_validation(
+            detector,
+            tmp_path,
+            {"barcode"},
+        )
+    )
+
+    assert report == {
+        "class_map": {0: "barcode"},
+        "per_class": {
+            "barcode": {
+                "targets": 1,
+                "predictions": 1,
+                "true_positives": 1,
+                "precision": 1.0,
+                "recall": 1.0,
+                "ap50": 1.0,
+            }
+        },
+        "aggregate_map50": 1.0,
+        "evaluated_images": 1,
+        "skipped_images": 0,
+        "acceptance": {
+            "passed": True,
+            "failed_classes": [],
+            "aggregate_passed": True,
+            "threshold": 0.9,
+        },
+    }
+
+
+def test_yolo_validation_counts_a_lower_confidence_false_positive(
+    tmp_path: Path,
+) -> None:
+    _write_yolo_sample(tmp_path, "false-positive", "0 0.5 0.5 0.4 0.4\n")
+    detector = FakeDetector(
+        {0: "barcode"},
+        {
+            "false-positive": [
+                _detection([0.3, 0.3, 0.7, 0.7], 0.9),
+                _detection([0.0, 0.0, 0.1, 0.1], 0.8),
+            ]
+        },
+    )
+
+    report = asyncio.run(
+        model_evaluation_service.evaluate_yolo_validation(
+            detector,
+            tmp_path,
+            {"barcode"},
+        )
+    )
+
+    assert report["per_class"]["barcode"]["precision"] == 0.5
+    assert report["per_class"]["barcode"]["recall"] == 1.0
+    assert report["per_class"]["barcode"]["ap50"] == 1.0
+
+
+def test_yolo_validation_reports_a_missed_target(tmp_path: Path) -> None:
+    _write_yolo_sample(tmp_path, "detected", "0 0.5 0.5 0.4 0.4\n")
+    _write_yolo_sample(tmp_path, "missed", "0 0.5 0.5 0.4 0.4\n")
+    detector = FakeDetector(
+        {0: "barcode"},
+        {"detected": [_detection([0.3, 0.3, 0.7, 0.7])]},
+    )
+
+    report = asyncio.run(
+        model_evaluation_service.evaluate_yolo_validation(
+            detector,
+            tmp_path,
+            {"barcode"},
+        )
+    )
+
+    assert report["per_class"]["barcode"]["recall"] == 0.5
+    assert report["per_class"]["barcode"]["ap50"] == 0.505
+
+
+def test_yolo_validation_treats_iou_below_half_as_a_miss(
+    tmp_path: Path,
+) -> None:
+    _write_yolo_sample(tmp_path, "low-iou", "0 0.5 0.5 0.4 0.4\n")
+    detector = FakeDetector(
+        {0: "barcode"},
+        {
+            "low-iou": [
+                _detection([0.436913, 0.3, 0.836913, 0.7]),
+            ]
+        },
+    )
+
+    report = asyncio.run(
+        model_evaluation_service.evaluate_yolo_validation(
+            detector,
+            tmp_path,
+            {"barcode"},
+        )
+    )
+
+    assert abs(
+        model_evaluation_service.iou_xyxy(
+            [0.3, 0.3, 0.7, 0.7],
+            [0.436913, 0.3, 0.836913, 0.7],
+        )
+        - 0.49
+    ) < 1e-6
+    assert report["per_class"]["barcode"]["true_positives"] == 0
+    assert report["per_class"]["barcode"]["ap50"] == 0.0
+
+
+def test_yolo_validation_rejects_an_absent_required_class(
+    tmp_path: Path,
+) -> None:
+    _write_yolo_sample(tmp_path, "sample", "0 0.5 0.5 0.4 0.4\n")
+
+    with pytest.raises(ValueError, match="required YOLO class mapping"):
+        asyncio.run(
+            model_evaluation_service.evaluate_yolo_validation(
+                FakeDetector({0: "barcode"}),
+                tmp_path,
+                {"stamp"},
+            )
+        )
+
+
+def test_yolo_gate_fails_when_one_class_is_below_threshold() -> None:
+    report = model_evaluation_service.yolo_gate(
+        {
+            "barcode": {"ap50": 0.99},
+            "materai": {"ap50": 0.89},
+            "signature": {"ap50": 0.95},
+            "stamp": {"ap50": 0.96},
+        },
+        0.90,
+    )
+
+    assert report["failed_classes"] == ["materai"]
+    assert report["aggregate_passed"] is True
+    assert report["passed"] is False
+
+
+def test_yolo_validation_gates_on_raw_ap_before_rounding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_yolo_sample(tmp_path, "boundary", "0 0.5 0.5 0.4 0.4\n")
+    detector = FakeDetector(
+        {0: "barcode"},
+        {"boundary": [_detection([0.3, 0.3, 0.7, 0.7])]},
+    )
+    monkeypatch.setattr(
+        model_evaluation_service,
+        "_interpolated_ap",
+        lambda flags, targets: 0.89996,
+    )
+
+    report = asyncio.run(
+        model_evaluation_service.evaluate_yolo_validation(
+            detector,
+            tmp_path,
+            {"barcode"},
+        )
+    )
+
+    assert report["per_class"]["barcode"]["ap50"] == 0.9
+    assert report["aggregate_map50"] == 0.9
+    assert report["acceptance"]["passed"] is False
+    assert report["acceptance"]["failed_classes"] == ["barcode"]
+    assert report["acceptance"]["aggregate_passed"] is False
 
 
 def test_field_gate_uses_raw_counts_instead_of_rounded_display_rate() -> None:
