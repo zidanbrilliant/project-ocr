@@ -77,6 +77,8 @@ class LocalExecutionService:
                         document.name,
                         document.doc_type,
                     )
+                    if raw.get("error"):
+                        raise RuntimeError(str(raw["error"]))
                     result_document = build_result_payload(
                         raw,
                         document.name,

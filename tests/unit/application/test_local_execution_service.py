@@ -26,9 +26,34 @@ def successful_raw_result(name: str) -> dict[str, Any]:
     }
 
 
+def failed_raw_result(name: str) -> dict[str, Any]:
+    return {
+        "filename": name,
+        "doc_type": "INV",
+        "status": "NG",
+        "error": f"cannot process {name}",
+        "processing_time_ms": 1,
+        "document_info": {},
+        "ocr": {},
+        "detections": [],
+        "detection_aggregated": {},
+        "barcode": {},
+        "fields": {},
+        "validation": {},
+        "confidence": {},
+        "remarks": f"cannot process {name}",
+        "pages": [],
+    }
+
+
 class RecordingProcessor:
-    def __init__(self, failing_name: str | None = None) -> None:
+    def __init__(
+        self,
+        failing_name: str | None = None,
+        returning_error_name: str | None = None,
+    ) -> None:
         self.failing_name = failing_name
+        self.returning_error_name = returning_error_name
         self.calls: list[str] = []
         self.active = 0
         self.max_active = 0
@@ -42,6 +67,8 @@ class RecordingProcessor:
             await asyncio.sleep(0)
             if filename == self.failing_name:
                 raise RuntimeError(f"cannot process {filename}")
+            if filename == self.returning_error_name:
+                return failed_raw_result(filename)
             return successful_raw_result(filename)
         finally:
             self.active -= 1
@@ -85,6 +112,30 @@ def test_run_inline_keeps_successful_documents_when_one_fails() -> None:
         "b.png",
         "c.png",
     ]
+    assert snapshot.result["documents"][1]["processing_status"] == "FAILED"
+    assert snapshot.result["documents"][1]["document_result"] == "NG"
+    assert snapshot.result["errors"] == [
+        {
+            "document_name": "b.png",
+            "stage": "PROCESSING",
+            "message": "cannot process b.png",
+        }
+    ]
+    assert snapshot.result["header"]["processing_result"] == "PARTIAL_SUCCESS"
+
+
+def test_run_inline_treats_returned_processor_error_as_failed_document() -> None:
+    processor = RecordingProcessor(returning_error_name="b.png")
+    service = LocalExecutionService(processor=processor)
+
+    snapshot = asyncio.run(
+        service.run_inline([document("a.png"), document("b.png"), document("c.png")])
+    )
+
+    assert processor.calls == ["a.png", "b.png", "c.png"]
+    assert snapshot.status == "PARTIAL_SUCCESS"
+    assert snapshot.completed_documents == 3
+    assert snapshot.result is not None
     assert snapshot.result["documents"][1]["processing_status"] == "FAILED"
     assert snapshot.result["documents"][1]["document_result"] == "NG"
     assert snapshot.result["errors"] == [
