@@ -1,10 +1,9 @@
 import pytest
 
-from app.domain.entities.business_validation_result import BusinessValidationResult
 from app.domain.entities.detection_result import DetectionResult
 from app.domain.entities.ocr_result import OCRResult
 from app.domain.services.business_rule_evaluator import BusinessRuleEvaluator, RuleConfig
-from app.shared.config.settings import settings
+from app.shared.config.settings import Settings, settings
 
 
 @pytest.fixture
@@ -80,6 +79,10 @@ def test_default_invoice_policy_allows_missing_invoice_number_when_disabled(monk
     result = BusinessRuleEvaluator().validate_invoice(OCRResult(invoice_number=None), [], 1_000, 90)
 
     assert "INV-R001" not in {item.rule_id for item in result.failed_rules}
+
+
+def test_local_default_policy_keeps_color_output_only() -> None:
+    assert Settings(_env_file=None).REQUIRE_COLORED_DOCUMENT is False
 
 
 def test_invoice_missing_materai_above_threshold(evaluator: BusinessRuleEvaluator) -> None:

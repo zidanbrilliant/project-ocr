@@ -148,7 +148,7 @@ def test_local_e2e_keeps_good_document_when_one_fails() -> None:
 
     assert ui_results[0]["rabbitmq_preview"] is snapshot.result
     assert good_page["ai_note"] == (
-        "OCR text found; 0 detection(s); barcode found; color evidence found."
+        "OCR text found; 0 detection(s); barcode decoded; color evidence found."
     )
     assert good_page["barcodes"][0]["evaluation_status"] == "not_evaluated"
     assert good_document["barcode"]["evaluation_status"] == "not_evaluated"

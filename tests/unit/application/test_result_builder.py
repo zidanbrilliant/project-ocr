@@ -54,7 +54,13 @@ def test_result_envelope_includes_local_identifiers_and_deterministic_page_note(
                         "page_number": 1,
                         "ocr": {"raw_text": "INV-1"},
                         "detections": [{"label": "stamp"}],
-                        "barcodes": [{"text": "INV-1"}],
+                        "barcodes": [
+                            {
+                                "barcode_found": True,
+                                "barcode_decoded": True,
+                                "text": "INV-1",
+                            }
+                        ],
                         "document_color": {"is_colored": True},
                     }
                 ],
@@ -67,7 +73,41 @@ def test_result_envelope_includes_local_identifiers_and_deterministic_page_note(
 
     assert result["header"]["correlation_id"] == "correlation-001"
     assert result["processing"]["job_id"] == "job-001"
-    assert result["documents"][0]["pages"][0]["ai_note"] == "OCR text found; 1 detection(s); barcode found; color evidence found."
+    assert result["documents"][0]["pages"][0]["ai_note"] == (
+        "OCR text found; 1 detection(s); barcode decoded; color evidence found."
+    )
+
+
+def test_result_envelope_page_note_does_not_claim_an_undetected_barcode() -> None:
+    result = build_result_envelope(
+        [
+            {
+                "document_id": "DOC-42",
+                "document_name": "invoice.png",
+                "document_result": "NG",
+                "pages": [
+                    {
+                        "page_number": 1,
+                        "ocr": {"raw_text": ""},
+                        "detections": [],
+                        "barcodes": [
+                            {
+                                "barcode_found": False,
+                                "barcode_decoded": False,
+                                "evaluation_status": "not_evaluated",
+                            }
+                        ],
+                        "document_color": {"is_colored": False},
+                    }
+                ],
+            }
+        ],
+        20,
+    )
+
+    assert result["documents"][0]["pages"][0]["ai_note"] == (
+        "OCR text not found; 0 detection(s); barcode not found; color evidence found."
+    )
 
 
 def test_apply_result_envelope_preserves_builder_page_ai_notes() -> None:
@@ -81,7 +121,13 @@ def test_apply_result_envelope_preserves_builder_page_ai_notes() -> None:
                     "page_number": 1,
                     "ocr": {"raw_text": "INV-1"},
                     "detections": [{"label": "stamp"}],
-                    "barcodes": [{"text": "INV-1"}],
+                    "barcodes": [
+                        {
+                            "barcode_found": True,
+                            "barcode_decoded": False,
+                            "text": "INV-1",
+                        }
+                    ],
                     "document_color": {"is_colored": True},
                 }
             ],

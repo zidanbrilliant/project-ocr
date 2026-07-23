@@ -232,7 +232,14 @@ def _page_ai_note(
     """Summarize page evidence deterministically for local review."""
     ocr_note = "OCR text found" if ocr.get("raw_text") else "OCR text not found"
     detection_note = f"{len(detections)} detection(s)"
-    barcode_note = "barcode found" if barcode else "barcode not found"
+    barcode_items = barcode if isinstance(barcode, list) else [barcode]
+    barcode_items = [item for item in barcode_items if isinstance(item, dict)]
+    if any(item.get("barcode_decoded") for item in barcode_items):
+        barcode_note = "barcode decoded"
+    elif any(item.get("barcode_found") for item in barcode_items):
+        barcode_note = "barcode found"
+    else:
+        barcode_note = "barcode not found"
     color_note = "color evidence found" if color_evidence else "color evidence not found"
     return f"{ocr_note}; {detection_note}; {barcode_note}; {color_note}."
 

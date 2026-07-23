@@ -57,12 +57,39 @@ def test_evaluate_fields_compares_amount_with_decimal_and_currency() -> None:
 
 def test_evaluate_fields_treats_null_as_an_exact_value() -> None:
     evaluation = evaluate_fields(
-        {"fields": [{"field_name": "document_number", "value": None}]},
+        {
+            "fields": [
+                {
+                    "field_name": "document_number",
+                    "value": None,
+                    "status": "NOT_FOUND",
+                }
+            ]
+        },
         {"document_number": None},
     )
 
     assert evaluation["checks"] == {"document_number": True}
     assert evaluation["all_core_fields_exact"] is True
+
+
+def test_evaluate_fields_does_not_match_an_absent_nullable_field() -> None:
+    evaluation = evaluate_fields(
+        {"fields": []},
+        {"document_number": None},
+    )
+
+    assert evaluation["checks"] == {"document_number": False}
+    assert evaluation["all_core_fields_exact"] is False
+
+
+def test_evaluate_fields_requires_not_found_status_for_nullable_field() -> None:
+    evaluation = evaluate_fields(
+        {"fields": [{"field_name": "document_number", "value": None}]},
+        {"document_number": None},
+    )
+
+    assert evaluation["checks"] == {"document_number": False}
 
 
 def test_candidate_recall_requires_amount_currency_and_skips_null_target() -> None:

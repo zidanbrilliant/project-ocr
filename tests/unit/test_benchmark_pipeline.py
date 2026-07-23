@@ -142,6 +142,70 @@ def test_benchmark_includes_raw_ocr_only_when_trace_is_requested(
     ]
 
 
+def test_benchmark_marks_every_labeled_field_mismatched_on_processing_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    image = tmp_path / "failed.png"
+    image.write_bytes(b"image")
+
+    class FailedService:
+        async def run_inline(self, documents: list[object]) -> LocalJobSnapshot:
+            document = {
+                "document_name": documents[0].name,
+                "processing_status": "FAILED",
+                "fields": [
+                    {
+                        "field_name": "document_number",
+                        "value": None,
+                        "status": "NOT_FOUND",
+                    },
+                    {
+                        "field_name": "transaction_amount",
+                        "value": 10,
+                        "currency": "IDR",
+                    },
+                ],
+                "errors": [{"stage": "PROCESSING", "message": "model unavailable"}],
+                "pages": [],
+            }
+            return LocalJobSnapshot(
+                job_id="job-failed",
+                status="FAILED",
+                completed_documents=1,
+                total_documents=1,
+                result={"documents": [document], "errors": []},
+                error=None,
+            )
+
+    monkeypatch.setattr(
+        benchmark_pipeline,
+        "LocalExecutionService",
+        FailedService,
+    )
+
+    report = asyncio.run(
+        benchmark_pipeline.benchmark(
+            tmp_path,
+            "INV",
+            {
+                image.name: {
+                    "document_number": None,
+                    "transaction_amount": {"value": 10, "currency": "IDR"},
+                }
+            },
+        )
+    )
+
+    row = report["results"][0]
+    assert row["error"] == "model unavailable"
+    assert row["checks"] == {
+        "document_number": False,
+        "transaction_amount": False,
+    }
+    assert report["accuracy"]["all_core_fields_exact"] == 0
+
+
 def test_benchmark_evaluates_val_with_the_local_execution_detector(
     tmp_path: Path,
     monkeypatch,

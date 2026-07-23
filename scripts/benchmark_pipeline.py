@@ -81,13 +81,20 @@ async def benchmark(
         total_pages += pages
         expected = (ground_truth or {}).get(path.name)
         evaluation = evaluate_fields(document, expected or {})
+        error = _snapshot_error(snapshot, envelope, document)
+        if error:
+            evaluation["checks"] = {
+                name: False
+                for name in evaluation["checks"]
+            }
+            evaluation["all_core_fields_exact"] = False
         row = {
             "file": str(path),
             "file_name": path.name,
             "status": document.get("processing_status", snapshot.status),
             "pages": pages,
             "duration_ms": round((time.perf_counter() - document_started) * 1000),
-            "error": _snapshot_error(snapshot, envelope, document),
+            "error": error,
             "expected": expected,
             "actual": evaluation["actual"],
             "checks": evaluation["checks"],

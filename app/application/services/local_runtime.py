@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import RLock
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 
@@ -105,7 +106,14 @@ class InMemoryLocalJobStore:
             record = self._record(job_id)
             self._require_status(job_id, record, "PENDING", "RUNNING")
             record.result = deepcopy(result)
-            record.status = status or ("PARTIAL_SUCCESS" if record.failed_documents else "SUCCEEDED")
+            if status:
+                record.status = status
+            elif record.failed_documents == record.total_documents and record.total_documents:
+                record.status = "FAILED"
+            elif record.failed_documents:
+                record.status = "PARTIAL_SUCCESS"
+            else:
+                record.status = "SUCCEEDED"
 
     def _record(self, job_id: str) -> _LocalJobRecord:
         try:

@@ -36,6 +36,23 @@ def test_store_tracks_progress_and_partial_success() -> None:
     assert snapshot.total_documents == 2
 
 
+def test_store_marks_job_failed_when_every_document_failed() -> None:
+    store = InMemoryLocalJobStore()
+    job_id = store.create(
+        [
+            LocalDocument("a.png", "image/png", b"x", "INV"),
+            LocalDocument("b.png", "image/png", b"y", "INV"),
+        ]
+    )
+
+    store.start(job_id)
+    store.document_finished(job_id, failed=True)
+    store.document_finished(job_id, failed=True)
+    store.complete(job_id, {"schema_version": "1.1.0"})
+
+    assert store.snapshot(job_id).status == "FAILED"
+
+
 def test_store_records_failure_state() -> None:
     store = InMemoryLocalJobStore()
     job_id = store.create([])

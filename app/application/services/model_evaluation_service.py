@@ -456,7 +456,10 @@ def _field_matches(
     field: dict[str, Any] | None,
     target: Any,
 ) -> bool:
-    field = field or {}
+    if field is None:
+        return False
+    if _target_value(target) is None and field.get("status") != "NOT_FOUND":
+        return False
     if normalize_field_value(name, field.get("value")) != normalize_field_value(
         name,
         _target_value(target),
